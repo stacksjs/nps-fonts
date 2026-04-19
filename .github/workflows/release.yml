@@ -54,7 +54,7 @@ jobs:
           cd fonts && zip -r "../dist/nps-fonts-all-${{ steps.ver.outputs.version }}.zip" . && cd ..
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
