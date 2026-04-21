@@ -1,15 +1,18 @@
 #!/usr/bin/env bun
 /**
- * Redwood Serif — an old-style / transitional serif inspired by NPS
- * Rawlinson OT and Plantin. Drawn from scratch with opentype.js.
+ * Redwood Serif — a warm, bookish transitional serif inspired by
+ * Plantin, Rawlinson Next (which NPS uses), and early 1910s book faces.
+ * Drawn from scratch with opentype.js. Substantial bracketed slab feet,
+ * two-storey 'a', loop-descender 'g', curved-leg R, park-field-journal
+ * warmth. Think NPS Unigrid posters and ranger-station handbooks — not
+ * Art Deco, not geometric.
  *
- * Uses the same shape primitives as Summitgrade 1935 (rect / ellipse /
- * legStroke / halfRing) so every glyph is a simple union of closed
- * sub-paths. Serif feet are simple slabs (rect + small chamfer rects)
- * rather than bracketed sweeps, which eliminates the mid-stroke
- * artifacts that plagued the previous implementation.
+ * Primitives (rect / ellipse / legStroke / halfRing / slabSerif) are
+ * shared with Summitgrade 1935 so every glyph is a simple union of
+ * closed sub-paths. No concave sweep brackets — the fillet is just a
+ * small rect at each stem/slab join.
  *
- * Coverage: A-Z, a-z, 0-9, basic punctuation. Single weight (Regular).
+ * Coverage: A-Z, a-z, 0-9, common punctuation. Single weight.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -28,20 +31,31 @@ const FONTS = resolve(ROOT, 'fonts', 'redwood-serif')
 
 const UPM = 1000
 const CAP = 700
-const XH = 500                  // larger x-height for bookish feel
-const ASCENDER = 680            // shorter ascenders — barely above cap
+const XH = 500                   // bookish large x-height
+const ASCENDER = 720             // ascender reaches just above CAP
 const DESCENDER = -200
-const STEM = 112                // heavier main vertical
-const THIN = 50                 // thin stroke (~2.24:1 contrast)
-const LC_STEM = 102
-const LC_THIN = 46
-const SERIF_EXT = 46            // horizontal overshoot each side of stem
-const SERIF_H = 38              // serif slab height
-const CHAMFER = 6               // tiny corner chamfer height
-const OV = 3                    // overlap for joins
-const LSB = 55
-const RSB = 55
+const STEM = 105                 // heavy vertical stem for bookish weight
+const THIN = 50                  // thin stroke (~2.1 : 1 contrast)
+const LC_STEM = 96               // lowercase stem slightly lighter
+const LC_THIN = 48
+const LSB = 90
+const RSB = 90
 const KAPPA = 0.5522847498307936
+
+// Serif geometry (simple slab with tiny fillet rects on each side)
+const SERIF_H = 36               // slab height at foot/head
+const SERIF_EXT = 50             // outward overshoot each side
+const FILLET = 6                 // tiny chamfer height at slab/stem junction
+const OV = 3                     // overlap fudge for joins
+
+// Lowercase serif geometry (a little shorter)
+const LC_SERIF_H = 32
+const LC_SERIF_EXT = 42
+
+// Crossbar heights (transitional — moderate)
+const H_BAR_Y = CAP * 0.50
+const A_BAR_Y = CAP * 0.32
+const E_BAR_Y = CAP * 0.48
 
 // ---------------------------------------------------------------------------
 // Primitives — shared with Summitgrade 1935
@@ -166,102 +180,63 @@ function halfRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: numb
   }
 }
 
-// Simple bracketed slab serif — two concentric rects forming a shallow
-// "T" footprint on the stem. No concave curves, no floating chunks.
-//   ─┬─┐  chamfer (small 8px overhang top)
-//    │   STEM continues up from here
-//   ─┴─┘
-// `cx`  = stem center X
-// `stemW` = stem width
-// `atY` = y of slab foot (bottom serif: baseline y; top serif: cap/asc y)
-// `side`= 'top' | 'bottom'
+// Simple bracketed slab serif drawn as a rectangle with two tiny "fillet"
+// corner rects that soften the slab→stem junction. No concave sweeps,
+// no cubic brackets — just plain rects, which keeps the union artifact-free.
+// `side` is 'top' or 'bottom'. The slab itself sits at `atY` (baseline for
+// bottom, cap-top for top). The fillet rects sit between the stem edge and
+// where the slab overhangs begin.
 function slabSerif(
   p: opentype.Path,
   cx: number,
   stemW: number,
   atY: number,
-  side: 'top' | 'bottom' = 'bottom',
-  extL = SERIF_EXT,
-  extR = SERIF_EXT,
-  h = SERIF_H,
+  opts: { side?: 'top' | 'bottom', extL?: number, extR?: number, height?: number, filletL?: boolean, filletR?: boolean } = {},
 ) {
-  const leftX = cx - stemW / 2 - extL
-  const width = stemW + extL + extR
-  // Bracket "filler" — strictly within the stem footprint so it never
-  // creates a step wider than the stem. OV guarantees union with the stem.
-  const fillerX = cx - stemW / 2 - OV
-  const fillerW = stemW + 2 * OV
+  const side = opts.side ?? 'bottom'
+  const extL = opts.extL ?? SERIF_EXT
+  const extR = opts.extR ?? SERIF_EXT
+  const h = opts.height ?? SERIF_H
+  const stemL = cx - stemW / 2
+  const stemR = cx + stemW / 2
+  const leftX = stemL - extL
+  const rightX = stemR + extR
+  const fillet = Math.min(FILLET, h - 2)
+
   if (side === 'bottom') {
-    rect(p, leftX, atY, width, h)
-    rect(p, fillerX, atY + h - OV, fillerW, OV * 2)
+    // Main slab rect at baseline.
+    rect(p, leftX, atY, rightX - leftX, h)
+    // Tiny fillet chamfers (small wedge-ish rects) sitting just above the
+    // slab, abutting the stem on each side. These soften the 90-degree
+    // junction into a bookish bracket without using cubic curves.
+    if ((opts.filletL ?? true) && extL > 0) {
+      // Step rect: 8 wide × fillet tall, hugging the outer side of the stem.
+      rect(p, stemL - Math.min(extL * 0.45, 14), atY + h - OV, Math.min(extL * 0.45, 14), fillet + OV)
+    }
+    if ((opts.filletR ?? true) && extR > 0) {
+      rect(p, stemR, atY + h - OV, Math.min(extR * 0.45, 14), fillet + OV)
+    }
   }
   else {
-    rect(p, leftX, atY - h, width, h)
-    rect(p, fillerX, atY - h - OV, fillerW, OV * 2)
+    // Top slab: atY is the TOP of the slab.
+    rect(p, leftX, atY - h, rightX - leftX, h)
+    if ((opts.filletL ?? true) && extL > 0) {
+      rect(p, stemL - Math.min(extL * 0.45, 14), atY - h - fillet, Math.min(extL * 0.45, 14), fillet + OV)
+    }
+    if ((opts.filletR ?? true) && extR > 0) {
+      rect(p, stemR, atY - h - fillet, Math.min(extR * 0.45, 14), fillet + OV)
+    }
   }
 }
 
-// Convenience: draw a vertical stem with slab serifs on top and/or bottom.
-function stem(
-  p: opentype.Path,
-  cx: number,
-  stemW: number,
-  y0: number,
-  y1: number,
-  opts: { top?: boolean, bottom?: boolean, topExtL?: number, topExtR?: number, botExtL?: number, botExtR?: number } = {},
-) {
-  rect(p, cx - stemW / 2, y0, stemW, y1 - y0)
-  if (opts.bottom !== false)
-    slabSerif(p, cx, stemW, y0, 'bottom', opts.botExtL ?? SERIF_EXT, opts.botExtR ?? SERIF_EXT)
-  if (opts.top !== false)
-    slabSerif(p, cx, stemW, y1, 'top', opts.topExtL ?? SERIF_EXT, opts.topExtR ?? SERIF_EXT)
-}
-
-// Old-style stressed ring — slightly thicker sides than top/bottom
-// (inverse of Clarendon: humanist stress gives thin horizontals, thick verticals).
-function stressedRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: number, thick = STEM, thin = THIN * 1.4) {
-  ellipse(p, cx, cy, rx, ry)
-  const irx = Math.max(1, rx - thick)
-  const iry = Math.max(1, ry - thin)
-  ellipse(p, cx, cy, irx, iry, true)
-}
-
-// Bottom bowl for U — a half-ellipse open at the top.
-function drawBottomBowl(p: opentype.Path, leftX: number, rightX: number, topY: number, depth: number, stroke: number) {
-  const cx = (leftX + rightX) / 2
-  const rx = (rightX - leftX) / 2
-  const ry = depth
-  const k = KAPPA
-  const irx = Math.max(0, rx - stroke)
-  const iry = Math.max(0, ry - stroke * 0.85)
-  if (irx > 0 && iry > 0) {
-    p.moveTo(leftX, topY)
-    p.curveTo(leftX, topY - ry * k, cx - rx * k, topY - ry, cx, topY - ry)
-    p.curveTo(cx + rx * k, topY - ry, rightX, topY - ry * k, rightX, topY)
-    p.lineTo(rightX - stroke, topY)
-    p.curveTo(rightX - stroke, topY - iry * k, cx + irx * k, topY - iry, cx, topY - iry)
-    p.curveTo(cx - irx * k, topY - iry, leftX + stroke, topY - iry * k, leftX + stroke, topY)
-    p.lineTo(leftX, topY)
-    p.close()
-  }
-  else {
-    p.moveTo(leftX, topY)
-    p.curveTo(leftX, topY - ry * k, cx - rx * k, topY - ry, cx, topY - ry)
-    p.curveTo(cx + rx * k, topY - ry, rightX, topY - ry * k, rightX, topY)
-    p.lineTo(leftX, topY)
-    p.close()
-  }
-}
-
-// Bowl anchored to a vertical stem (for B, D, P, R, b, d, p, q).
-// Draws a filled D-shape whose flat side sits at stemRightX.
+// Bowl from a stem's right edge: used on B, D, P, R, and lowercase.
 function drawBowl(p: opentype.Path, stemRightX: number, bottomY: number, w: number, h: number, stroke: number) {
   const cy = bottomY + h / 2
   const rx = w
   const ry = h / 2
   const k = KAPPA
   const irx = Math.max(0, rx - stroke)
-  const iry = Math.max(0, ry - stroke * 0.85)
+  const iry = Math.max(0, ry - stroke * 0.9)
   if (irx > 0 && iry > 0) {
     p.moveTo(stemRightX, cy - ry)
     p.curveTo(stemRightX + rx * k, cy - ry, stemRightX + rx, cy - ry * k, stemRightX + rx, cy)
@@ -281,61 +256,116 @@ function drawBowl(p: opentype.Path, stemRightX: number, bottomY: number, w: numb
   }
 }
 
+// U-bottom bowl: for U and lowercase u.
+function drawBottomBowl(p: opentype.Path, leftX: number, rightX: number, topY: number, depth: number, stroke: number) {
+  const cx = (leftX + rightX) / 2
+  const rx = (rightX - leftX) / 2
+  const ry = depth
+  const k = KAPPA
+  const irx = Math.max(0, rx - stroke)
+  const iry = Math.max(0, ry - stroke)
+  if (irx > 0 && iry > 0) {
+    p.moveTo(leftX, topY)
+    p.curveTo(leftX, topY - ry * k, cx - rx * k, topY - ry, cx, topY - ry)
+    p.curveTo(cx + rx * k, topY - ry, rightX, topY - ry * k, rightX, topY)
+    p.lineTo(rightX - stroke, topY)
+    p.curveTo(rightX - stroke, topY - iry * k, cx + irx * k, topY - iry, cx, topY - iry)
+    p.curveTo(cx - irx * k, topY - iry, leftX + stroke, topY - iry * k, leftX + stroke, topY)
+    p.lineTo(leftX, topY)
+    p.close()
+  }
+  else {
+    p.moveTo(leftX, topY)
+    p.curveTo(leftX, topY - ry * k, cx - rx * k, topY - ry, cx, topY - ry)
+    p.curveTo(cx + rx * k, topY - ry, rightX, topY - ry * k, rightX, topY)
+    p.lineTo(leftX, topY)
+    p.close()
+  }
+}
+
+// Stressed ellipse ring — slight vertical stress (bookish transitional).
+function stressedRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: number, stroke: number) {
+  ellipse(p, cx, cy, rx, ry)
+  const irx = Math.max(1, rx - stroke * 0.95)
+  const iry = Math.max(1, ry - stroke * 0.75)
+  ellipse(p, cx, cy, irx, iry, true)
+}
+
+// Small teardrop / ball terminal (for a, c, f, r, etc.).
+function dropTerminal(p: opentype.Path, cx: number, cy: number, w: number, h: number) {
+  ellipse(p, cx, cy, w / 2, h / 2)
+}
+
 // ---------------------------------------------------------------------------
-// Capital glyph drawers
+// Glyph drawers
 // ---------------------------------------------------------------------------
 
 interface GlyphResult { advance: number }
 type Drawer = (p: opentype.Path) => GlyphResult
 
-const WIDE_W = CAP * 1.14
-const ROUND_W = CAP * 0.90
+const WIDE_W = CAP * 1.04
+const ROUND_W = CAP * 0.82
 
-// --- A ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// A — solid apex (pointy), crossbar at 0.32 CAP, flared slab feet.
+// ---------------------------------------------------------------------------
 const A: Drawer = (p) => {
-  const w = CAP * 0.96
+  const w = CAP * 0.92
   const x0 = LSB
   const cx = x0 + w / 2
-  const apexHalf = 12
-  const diag = THIN + 6
+  const apexY = CAP
+  const apexFlatHalf = 12
+  const leftDia = THIN + 24
+  const rightDia = STEM
 
-  // Two diagonals meeting at a small flat apex
-  legStroke(p, x0 + diag * 0.5, cx - apexHalf, 0, CAP, diag)
-  legStroke(p, x0 + w - diag * 0.5, cx + apexHalf, 0, CAP, diag)
-  // Apex cap
-  rect(p, cx - apexHalf - 6, CAP - 14, apexHalf * 2 + 12, 14)
-  // Crossbar
-  const barY = CAP * 0.32
-  const barH = THIN
-  const slope = (cx - apexHalf - (x0 + diag * 0.5)) / CAP
-  const innerL = (x0 + diag * 0.5) + slope * barY + diag * 0.5 - 6
-  const innerR = (x0 + w - diag * 0.5) - slope * barY - diag * 0.5 + 6
-  rect(p, innerL, barY, innerR - innerL, barH)
-  // Bottom slab feet (outward-only serifs)
-  slabSerif(p, x0 + diag * 0.5, diag, 0, 'bottom', SERIF_EXT, SERIF_EXT - 10)
-  slabSerif(p, x0 + w - diag * 0.5, diag, 0, 'bottom', SERIF_EXT - 10, SERIF_EXT)
+  // Left (thin) and right (heavy) diagonals — old-style contrast.
+  legStroke(p, x0 + leftDia * 0.5, cx - apexFlatHalf, 0, apexY, leftDia)
+  legStroke(p, x0 + w - rightDia * 0.5, cx + apexFlatHalf, 0, apexY, rightDia)
+
+  // Tiny flat apex cap so the peak isn't a needle.
+  rect(p, cx - apexFlatHalf - 4, apexY - 14, apexFlatHalf * 2 + 8, 14)
+
+  // Crossbar spanning the inner diagonal edges.
+  const barY = A_BAR_Y
+  const slopeL = (cx - apexFlatHalf - (x0 + leftDia * 0.5)) / apexY
+  const slopeR = ((x0 + w - rightDia * 0.5) - (cx + apexFlatHalf)) / apexY
+  const innerL = (x0 + leftDia * 0.5) + slopeL * barY + leftDia * 0.5 - 6
+  const innerR = (x0 + w - rightDia * 0.5) - slopeR * barY - rightDia * 0.5 + 6
+  rect(p, innerL, barY, innerR - innerL, THIN + 18)
+
+  // Slab feet — flare outward only (typical for serif A).
+  slabSerif(p, x0 + leftDia * 0.5, leftDia, 0, { side: 'bottom', extL: SERIF_EXT - 6, extR: SERIF_EXT + 4 })
+  slabSerif(p, x0 + w - rightDia * 0.5, rightDia, 0, { side: 'bottom', extL: SERIF_EXT + 4, extR: SERIF_EXT - 6 })
 
   return { advance: LSB + w + RSB }
 }
 
-// --- B ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// B — stem with stacked bowls, bottom bowl slightly wider.
+// ---------------------------------------------------------------------------
 const B: Drawer = (p) => {
-  const w = CAP * 0.76
+  const w = CAP * 0.72
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
 
-  const upperH = CAP * 0.48
-  const lowerH = CAP - upperH
-  drawBowl(p, x0 + STEM - OV, CAP - upperH, w - STEM - 8, upperH, STEM * 0.95)
-  drawBowl(p, x0 + STEM - OV, 0, w - STEM, lowerH, STEM * 0.95)
+  const upperBowlH = CAP * 0.50
+  const upperBowlW = w - STEM - 14
+  const lowerBowlH = CAP - upperBowlH
+  const lowerBowlW = w - STEM
+  drawBowl(p, x0 + STEM, CAP - upperBowlH, upperBowlW, upperBowlH, THIN + 40)
+  drawBowl(p, x0 + STEM, 0, lowerBowlW, lowerBowlH, THIN + 40)
 
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 8)
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, 8)
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 6, filletR: false })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom', extL: SERIF_EXT, extR: 6, filletR: false })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- C ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// C — open bowl with short upper beak and small lower terminal.
+// ---------------------------------------------------------------------------
 const C: Drawer = (p) => {
   const w = ROUND_W
   const x0 = LSB
@@ -343,62 +373,93 @@ const C: Drawer = (p) => {
   const cy = CAP / 2
   const rx = w / 2
   const ry = CAP / 2
+  const stroke = THIN + 42
 
-  halfRing(p, cx, cy, rx, ry, STEM, 'left')
-  // Top and bottom arms (shorter than Clarendon, no ball terminals)
-  const armLen = w * 0.22
-  rect(p, cx - OV, CAP - THIN * 1.3, armLen, THIN * 1.3)
-  rect(p, cx - OV, 0, armLen, THIN * 1.3)
-  // Tiny serif tips
-  rect(p, cx + armLen - 4, CAP - THIN * 1.3 - 8, 8, 8)
-  rect(p, cx + armLen - 4, THIN * 1.3, 8, 8)
+  // Outer C ring — we draw a full ellipse hollow then chisel out the right
+  // opening with a large rect positioned to the right of cx.
+  ellipse(p, cx, cy, rx, ry)
+  ellipse(p, cx, cy, rx - stroke, ry - stroke * 0.85, true)
+  // Carve the right mouth opening.
+  rect(p, cx + rx * 0.15, cy - ry * 0.55, rx, ry * 1.1)
+
+  // Small beaked upper terminal (old-style spur at top-right of the bowl).
+  rect(p, cx + rx * 0.15 - 12, CAP - stroke - 4, 20, stroke * 0.75)
+  // Small lower terminal with a soft drop.
+  dropTerminal(p, cx + rx * 0.35, stroke * 0.55, THIN + 30, THIN + 40)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- D ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// D — stem with full-height bowl.
+// ---------------------------------------------------------------------------
 const D: Drawer = (p) => {
-  const w = CAP * 0.86
+  const w = CAP * 0.82
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
-  drawBowl(p, x0 + STEM - OV, 0, w - STEM, CAP, STEM * 0.95)
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 4)
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, 4)
+  drawBowl(p, x0 + STEM, 0, w - STEM, CAP, THIN + 42)
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 4, filletR: false })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom', extL: SERIF_EXT, extR: 4, filletR: false })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- E ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// E — stem + 3 arms, serifs on top/bottom of stem.
+// ---------------------------------------------------------------------------
 const E: Drawer = (p) => {
-  const w = CAP * 0.72
+  const w = CAP * 0.68
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+  const armH = THIN + 36
+
   rect(p, x0, 0, STEM, CAP)
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  rect(p, x0, 0, w, THIN * 1.3)
-  rect(p, x0, CAP * 0.48, w * 0.80, THIN)
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 0)
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, 0)
-  // Right-end tick serifs on top/bottom arms
-  rect(p, x0 + w - 6, CAP - THIN * 1.3 - 10, 10, 10)
-  rect(p, x0 + w - 6, THIN * 1.3, 10, 10)
+  // Top and bottom arms.
+  rect(p, x0, CAP - armH, w, armH)
+  rect(p, x0, 0, w, armH)
+  // Middle bar (slightly shorter).
+  rect(p, x0, E_BAR_Y, w * 0.78, THIN + 28)
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 0 })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom', extL: SERIF_EXT, extR: 0 })
+
+  // End ticks on top & bottom arms (tiny downward/upward stubs).
+  rect(p, x0 + w - 10, CAP - armH - 14, 10, 14)
+  rect(p, x0 + w - 10, armH, 10, 14)
+  // End tick on middle bar.
+  rect(p, x0 + w * 0.78 - 4, E_BAR_Y - 10, 10, 10)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- F ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// F — like E minus the bottom arm.
+// ---------------------------------------------------------------------------
 const F: Drawer = (p) => {
-  const w = CAP * 0.70
+  const w = CAP * 0.64
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+  const armH = THIN + 36
+
   rect(p, x0, 0, STEM, CAP)
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  rect(p, x0, CAP * 0.48, w * 0.78, THIN)
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 0)
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, SERIF_EXT)
-  rect(p, x0 + w - 6, CAP - THIN * 1.3 - 10, 10, 10)
+  rect(p, x0, CAP - armH, w, armH)
+  rect(p, x0, E_BAR_Y, w * 0.74, THIN + 28)
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 0 })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom' })
+
+  rect(p, x0 + w - 10, CAP - armH - 14, 10, 14)
+  rect(p, x0 + w * 0.74 - 4, E_BAR_Y - 10, 10, 10)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- G ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// G — like C with a short inner spur and a small right shelf.
+// ---------------------------------------------------------------------------
 const G: Drawer = (p) => {
   const w = ROUND_W
   const x0 = LSB
@@ -406,305 +467,423 @@ const G: Drawer = (p) => {
   const cy = CAP / 2
   const rx = w / 2
   const ry = CAP / 2
+  const stroke = THIN + 42
 
-  halfRing(p, cx, cy, rx, ry, STEM, 'left')
-  // Top arm short
-  rect(p, cx - OV, CAP - THIN * 1.3, w * 0.22, THIN * 1.3)
-  // Bottom arm extends right to the spur
-  rect(p, cx - OV, 0, w * 0.50, THIN * 1.3)
-  // Spur (short vertical from upper-right corner down)
-  const spurX = x0 + w - STEM
-  rect(p, spurX, 0, STEM, CAP * 0.44)
-  // Horizontal crossbar on spur (G crossbar)
-  rect(p, x0 + w * 0.50, CAP * 0.42, w * 0.30, THIN)
+  ellipse(p, cx, cy, rx, ry)
+  ellipse(p, cx, cy, rx - stroke, ry - stroke * 0.85, true)
+  rect(p, cx + rx * 0.18, cy - ry * 0.2, rx, ry * 0.75)
+
+  // Horizontal shelf bar at mid-height on the right.
+  rect(p, cx + rx * 0.18 - 22, cy - 4, rx * 0.7, THIN + 24)
+  // Vertical spur dropping from shelf to the lower bowl rim.
+  rect(p, x0 + w - stroke, 0, stroke, cy + 8)
+
+  // Upper beak terminal.
+  rect(p, cx + rx * 0.18 - 12, CAP - stroke - 4, 20, stroke * 0.75)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- H ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// H — two stems with crossbar.
+// ---------------------------------------------------------------------------
 const H: Drawer = (p) => {
-  const w = CAP * 0.88
+  const w = CAP * 0.84
   const x0 = LSB
   const cxL = x0 + STEM / 2
   const cxR = x0 + w - STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   rect(p, x0 + w - STEM, 0, STEM, CAP)
-  rect(p, x0 + STEM - OV, CAP * 0.48, w - 2 * STEM + 2 * OV, THIN)
-  slabSerif(p, cxL, STEM, CAP, 'top')
-  slabSerif(p, cxL, STEM, 0, 'bottom')
-  slabSerif(p, cxR, STEM, CAP, 'top')
-  slabSerif(p, cxR, STEM, 0, 'bottom')
+  rect(p, x0 + STEM - 2, H_BAR_Y - (THIN + 22) / 2, w - 2 * STEM + 4, THIN + 22)
+
+  slabSerif(p, cxL, STEM, CAP, { side: 'top' })
+  slabSerif(p, cxL, STEM, 0, { side: 'bottom' })
+  slabSerif(p, cxR, STEM, CAP, { side: 'top' })
+  slabSerif(p, cxR, STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- I ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// I — stem with big slab serifs.
+// ---------------------------------------------------------------------------
 const I: Drawer = (p) => {
-  const cx = LSB + STEM / 2
-  rect(p, LSB, 0, STEM, CAP)
-  slabSerif(p, cx, STEM, CAP, 'top', SERIF_EXT + 6, SERIF_EXT + 6)
-  slabSerif(p, cx, STEM, 0, 'bottom', SERIF_EXT + 6, SERIF_EXT + 6)
-  return { advance: LSB + STEM + SERIF_EXT * 2 + RSB - 10 }
+  const cx = LSB + STEM / 2 + 10
+  rect(p, cx - STEM / 2, 0, STEM, CAP)
+  slabSerif(p, cx, STEM, CAP, { side: 'top', extL: SERIF_EXT + 6, extR: SERIF_EXT + 6 })
+  slabSerif(p, cx, STEM, 0, { side: 'bottom', extL: SERIF_EXT + 6, extR: SERIF_EXT + 6 })
+  return { advance: LSB + STEM + 20 + RSB }
 }
 
-// --- J ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// J — stem with top serif and a curved descent below baseline.
+// ---------------------------------------------------------------------------
 const J: Drawer = (p) => {
-  const w = CAP * 0.58
+  const w = CAP * 0.56
   const x0 = LSB
-  const stemCx = x0 + w - STEM / 2
-  const hookCY = CAP * 0.20
-  rect(p, x0 + w - STEM, hookCY, STEM, CAP - hookCY)
-  halfRing(p, x0 + w / 2, hookCY, w / 2, CAP * 0.20, STEM, 'bottom')
-  slabSerif(p, stemCx, STEM, CAP, 'top')
+  const stemCx = x0 + w - STEM / 2 - 10
+  const hookBotY = -140
+  const hookCY = hookBotY + STEM * 0.4
+
+  // Main vertical stem (top slab down to a curve start).
+  rect(p, stemCx - STEM / 2, hookCY, STEM, CAP - hookCY)
+  // Bottom hook half-ring descending below baseline.
+  halfRing(p, stemCx - (w * 0.38), hookCY, w * 0.42, (hookCY - hookBotY) + STEM * 0.3, STEM, 'bottom')
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- K ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// K — stem with upper thin diagonal and lower thicker leg that flares.
+// ---------------------------------------------------------------------------
 const K: Drawer = (p) => {
-  const w = CAP * 0.84
+  const w = CAP * 0.82
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   const midY = CAP * 0.44
-  // Upper arm: thin diagonal
-  legStroke(p, x0 + STEM - OV, x0 + w - THIN * 0.4, midY, CAP, THIN)
-  // Lower leg: thick diagonal
-  legStroke(p, x0 + w - STEM * 0.5, x0 + STEM - OV, 0, midY, STEM * 0.9)
-  // Slab on lower leg foot
-  slabSerif(p, x0 + w - STEM * 0.5, STEM * 0.7, 0, 'bottom', 16, SERIF_EXT)
-  // Tiny tick on upper arm top-right
-  rect(p, x0 + w - 12, CAP - 10, 14, 10)
-  slabSerif(p, cxS, STEM, CAP, 'top')
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, 0)
+
+  // Upper arm — thin.
+  legStroke(p, x0 + STEM - 4, x0 + w - THIN * 0.4, midY, CAP, THIN + 14)
+  // Lower leg — thicker, flaring outward.
+  legStroke(p, x0 + w + 6, x0 + STEM - 4, 0, midY, STEM - 10)
+
+  // Small slab on upper arm end (down into bar).
+  rect(p, x0 + w - 18, CAP - 20, 22, 20)
+  // Slab foot on leg.
+  slabSerif(p, x0 + w + 6, STEM - 10, 0, { side: 'bottom', extL: 14, extR: SERIF_EXT })
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top' })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom', extR: 0 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- L ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// L — stem + bottom arm.
+// ---------------------------------------------------------------------------
 const L: Drawer = (p) => {
-  const w = CAP * 0.72
+  const w = CAP * 0.68
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
-  rect(p, x0, 0, w, THIN * 1.3)
-  slabSerif(p, cxS, STEM, CAP, 'top')
-  slabSerif(p, cxS, STEM, 0, 'bottom', SERIF_EXT, 0)
-  rect(p, x0 + w - 8, THIN * 1.3, 10, 10)
+  rect(p, x0, 0, w, THIN + 36)
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top' })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom', extR: 0 })
+  rect(p, x0 + w - 10, THIN + 36, 10, 14)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- M ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// M — outer stems with inner diagonals to baseline.
+// ---------------------------------------------------------------------------
 const M: Drawer = (p) => {
   const w = WIDE_W
   const x0 = LSB
   const cxL = x0 + STEM / 2
   const cxR = x0 + w - STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   rect(p, x0 + w - STEM, 0, STEM, CAP)
+
   const cx = x0 + w / 2
-  const dia = THIN * 0.85
+  const dia = THIN + 28
+
   legStroke(p, cx - dia / 2 + OV, x0 + STEM + dia / 2 - OV, 0, CAP, dia)
   legStroke(p, cx + dia / 2 - OV, x0 + w - STEM - dia / 2 + OV, 0, CAP, dia)
-  rect(p, cx - dia, 0, dia * 2, 5)
-  slabSerif(p, cxL, STEM, CAP, 'top', SERIF_EXT, 0)
-  slabSerif(p, cxR, STEM, CAP, 'top', 0, SERIF_EXT)
-  slabSerif(p, cxL, STEM, 0, 'bottom')
-  slabSerif(p, cxR, STEM, 0, 'bottom')
+  rect(p, cx - dia, 0, dia * 2, 6)
+
+  slabSerif(p, cxL, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 0 })
+  slabSerif(p, cxR, STEM, CAP, { side: 'top', extL: 0, extR: SERIF_EXT })
+  slabSerif(p, cxL, STEM, 0, { side: 'bottom' })
+  slabSerif(p, cxR, STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- N ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// N — stems with diagonal.
+// ---------------------------------------------------------------------------
 const N: Drawer = (p) => {
   const w = CAP * 0.84
   const x0 = LSB
   const cxL = x0 + STEM / 2
   const cxR = x0 + w - STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   rect(p, x0 + w - STEM, 0, STEM, CAP)
-  legStroke(p, x0 + w - STEM + OV, x0 + STEM - OV, 0, CAP, THIN * 1.1)
-  slabSerif(p, cxL, STEM, CAP, 'top', SERIF_EXT, 4)
-  slabSerif(p, cxR, STEM, CAP, 'top', 4, SERIF_EXT)
-  slabSerif(p, cxL, STEM, 0, 'bottom', SERIF_EXT, 4)
-  slabSerif(p, cxR, STEM, 0, 'bottom', 4, SERIF_EXT)
+  legStroke(p, x0 + w - STEM + OV, x0 + STEM - OV, 0, CAP, THIN + 24)
+
+  slabSerif(p, cxL, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 5 })
+  slabSerif(p, cxR, STEM, CAP, { side: 'top', extL: 5, extR: SERIF_EXT })
+  slabSerif(p, cxL, STEM, 0, { side: 'bottom', extL: SERIF_EXT, extR: 5 })
+  slabSerif(p, cxR, STEM, 0, { side: 'bottom', extL: 5, extR: SERIF_EXT })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- O ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// O — stressed ring, bookish proportions.
+// ---------------------------------------------------------------------------
 const O: Drawer = (p) => {
   const w = ROUND_W
   const x0 = LSB
   const cx = x0 + w / 2
-  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, STEM, THIN * 1.35)
+  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, THIN + 48)
   return { advance: LSB + w + RSB }
 }
 
-// --- P ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// P — stem with upper bowl.
+// ---------------------------------------------------------------------------
 const P: Drawer = (p) => {
-  const w = CAP * 0.68
+  const w = CAP * 0.72
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   const bowlH = CAP * 0.52
-  drawBowl(p, x0 + STEM - OV, CAP - bowlH, w - STEM, bowlH, STEM * 0.95)
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 4)
-  slabSerif(p, cxS, STEM, 0, 'bottom')
+  drawBowl(p, x0 + STEM, CAP - bowlH, w - STEM, bowlH, THIN + 40)
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 4, filletR: false })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- Q ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Q — O + short tail crossing bottom of bowl.
+// ---------------------------------------------------------------------------
 const Q: Drawer = (p) => {
   const w = ROUND_W
   const x0 = LSB
   const cx = x0 + w / 2
-  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, STEM, THIN * 1.35)
-  // Tail
-  legStroke(p, x0 + w + 20, cx + w * 0.1, -STEM * 0.3, CAP * 0.22, THIN * 1.1)
-  return { advance: LSB + w + 30 + RSB }
+  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, THIN + 48)
+
+  // Tail starts near center bottom of bowl, sweeps down-right past the
+  // baseline and ring. Bookish: short, decisive, crossing through the bowl.
+  const tailStartX = cx + w * 0.04
+  const tailStartY = CAP * 0.10
+  const tailEndX = x0 + w + 10
+  const tailEndY = -80
+  legStroke(p, tailEndX, tailStartX, tailEndY, tailStartY, THIN + 14)
+  // Small end stub.
+  rect(p, tailEndX - (THIN + 14) / 2, tailEndY, THIN + 14, 14)
+
+  return { advance: LSB + w + RSB }
 }
 
-// --- R ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// R — stem, upper bowl, curved/flared leg.
+// ---------------------------------------------------------------------------
 const R: Drawer = (p) => {
-  const w = CAP * 0.76
+  const w = CAP * 0.80
   const x0 = LSB
-  const cxS = x0 + STEM / 2
+  const stemCx = x0 + STEM / 2
+
   rect(p, x0, 0, STEM, CAP)
   const bowlH = CAP * 0.52
-  drawBowl(p, x0 + STEM - OV, CAP - bowlH, w - STEM, bowlH, STEM * 0.95)
+  drawBowl(p, x0 + STEM, CAP - bowlH, w - STEM, bowlH, THIN + 40)
   const junctionY = CAP - bowlH
-  // Leg — slightly tapered
+
+  // Curved/tapered leg: thinner near the bowl junction, thicker at the base,
+  // flaring a bit outward past x0 + w.
   const legFootX = x0 + w + 4
-  const legTopX = x0 + STEM + 4
-  p.moveTo(legFootX - STEM * 0.45, 0)
-  p.lineTo(legFootX + STEM * 0.45, 0)
-  p.lineTo(legTopX + STEM * 0.3, junctionY + OV)
-  p.lineTo(legTopX - STEM * 0.3, junctionY + OV)
+  const legTopX = x0 + STEM + 6
+  const halfTop = (THIN + 16) / 2
+  const halfBot = (STEM - 12) / 2
+  p.moveTo(legFootX - halfBot, 0)
+  p.lineTo(legFootX + halfBot, 0)
+  p.lineTo(legTopX + halfTop, junctionY + OV)
+  p.lineTo(legTopX - halfTop, junctionY + OV)
   p.close()
-  slabSerif(p, cxS, STEM, CAP, 'top', SERIF_EXT, 4)
-  slabSerif(p, cxS, STEM, 0, 'bottom')
-  slabSerif(p, legFootX, STEM * 0.6, 0, 'bottom', 10, SERIF_EXT)
-  return { advance: LSB + w + 20 + RSB }
+
+  slabSerif(p, stemCx, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 4, filletR: false })
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom' })
+  slabSerif(p, legFootX, STEM - 12, 0, { side: 'bottom', extL: 10, extR: SERIF_EXT })
+
+  return { advance: LSB + w + RSB }
 }
 
-// --- S ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// S — classical S with top and bottom curves and a diagonal spine.
+// ---------------------------------------------------------------------------
 const S: Drawer = (p) => {
   const w = CAP * 0.68
   const x0 = LSB
   const cx = x0 + w / 2
-  const upperCY = CAP * 0.72
-  const lowerCY = CAP * 0.28
   const rx = w / 2
   const ry = CAP * 0.28
+  const upperCY = CAP - ry
+  const lowerCY = ry
+  const stroke = THIN + 40
 
-  halfRing(p, cx, upperCY, rx, ry, STEM * 0.95, 'top')
-  halfRing(p, cx, lowerCY, rx, ry, STEM * 0.95, 'bottom')
-  legStroke(p, x0 + w - STEM * 0.5, x0 + STEM * 0.5, lowerCY - STEM * 0.15, upperCY + STEM * 0.15, STEM * 0.9)
+  halfRing(p, cx, upperCY, rx, ry, stroke, 'top')
+  halfRing(p, cx, lowerCY, rx, ry, stroke, 'bottom')
+  legStroke(p, x0 + w - stroke * 0.45, x0 + stroke * 0.45, lowerCY - 4, upperCY + 4, stroke * 0.95)
+
+  // Small drop terminals top-right and bottom-left for that bookish finish.
+  dropTerminal(p, x0 + w - stroke / 2, upperCY + 6, THIN + 26, THIN + 36)
+  dropTerminal(p, x0 + stroke / 2, lowerCY - 6, THIN + 26, THIN + 36)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- T ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// T — top bar + stem.
+// ---------------------------------------------------------------------------
 const T: Drawer = (p) => {
-  const w = CAP * 0.78
+  const w = CAP * 0.80
   const x0 = LSB
+  const barH = THIN + 36
   const stemCx = x0 + w / 2
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  rect(p, x0 + w / 2 - STEM / 2, 0, STEM, CAP)
-  // Tick terminals at ends of top bar
-  rect(p, x0, CAP - THIN * 1.3 - 10, 12, 10)
-  rect(p, x0 + w - 12, CAP - THIN * 1.3 - 10, 12, 10)
-  slabSerif(p, stemCx, STEM, 0, 'bottom')
+
+  rect(p, x0, CAP - barH, w, barH)
+  rect(p, stemCx - STEM / 2, 0, STEM, CAP - barH + OV)
+
+  // End ticks drop down from bar.
+  rect(p, x0, CAP - barH - 14, 14, 14)
+  rect(p, x0 + w - 14, CAP - barH - 14, 14, 14)
+
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- U ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// U — two stems + bottom bowl.
+// ---------------------------------------------------------------------------
 const U: Drawer = (p) => {
   const w = CAP * 0.82
   const x0 = LSB
   const stemBottom = CAP * 0.28
   const cxL = x0 + STEM / 2
   const cxR = x0 + w - STEM / 2
+
   rect(p, x0, stemBottom, STEM, CAP - stemBottom)
   rect(p, x0 + w - STEM, stemBottom, STEM, CAP - stemBottom)
-  drawBottomBowl(p, x0, x0 + w, stemBottom + OV, stemBottom, STEM * 0.95)
-  slabSerif(p, cxL, STEM, CAP, 'top')
-  slabSerif(p, cxR, STEM, CAP, 'top')
+  drawBottomBowl(p, x0, x0 + w, stemBottom, stemBottom, THIN + 42)
+
+  slabSerif(p, cxL, STEM, CAP, { side: 'top', extL: SERIF_EXT, extR: 5 })
+  slabSerif(p, cxR, STEM, CAP, { side: 'top', extL: 5, extR: SERIF_EXT })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- V ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// V — two diagonals meeting at baseline.
+// ---------------------------------------------------------------------------
 const V: Drawer = (p) => {
-  const w = CAP * 0.86
+  const w = CAP * 0.88
   const x0 = LSB
   const cx = x0 + w / 2
-  const dia = THIN + 4
-  legStroke(p, cx + OV, x0 + dia / 2, 0, CAP, dia)
-  legStroke(p, cx - OV, x0 + w - dia / 2, 0, CAP, dia)
-  rect(p, cx - dia, 0, dia * 2, 5)
-  slabSerif(p, x0 + dia / 2, dia, CAP, 'top', 20, 20, 16)
-  slabSerif(p, x0 + w - dia / 2, dia, CAP, 'top', 20, 20, 16)
+  const diaL = STEM - 12       // left is heavy in old-style
+  const diaR = THIN + 20
+
+  legStroke(p, cx + OV, x0 + diaL / 2, 0, CAP, diaL)
+  legStroke(p, cx - OV, x0 + w - diaR / 2, 0, CAP, diaR)
+  rect(p, cx - diaL * 0.4, 0, diaL * 0.8, 6)
+
+  slabSerif(p, x0 + diaL / 2, diaL, CAP, { side: 'top', extL: 26, extR: 22, height: 22 })
+  slabSerif(p, x0 + w - diaR / 2, diaR, CAP, { side: 'top', extL: 22, extR: 26, height: 22 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- W ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// W — four diagonals, inner peak to cap top.
+// ---------------------------------------------------------------------------
 const W: Drawer = (p) => {
-  const w = WIDE_W * 1.05
+  const w = WIDE_W * 1.10
   const x0 = LSB
-  const dia = THIN * 0.75
+  const dia1 = STEM - 22
+  const dia2 = THIN + 18
   const cx = x0 + w / 2
   const footL = x0 + w * 0.28
   const footR = x0 + w * 0.72
-  legStroke(p, footL + OV, x0 + dia / 2, 0, CAP, dia)
-  legStroke(p, footL - OV, cx - dia / 2 + OV, 0, CAP, dia)
-  legStroke(p, footR + OV, cx + dia / 2 - OV, 0, CAP, dia)
-  legStroke(p, footR - OV, x0 + w - dia / 2, 0, CAP, dia)
-  rect(p, footL - dia, 0, dia * 2, 5)
-  rect(p, footR - dia, 0, dia * 2, 5)
-  rect(p, cx - dia, CAP - 6, dia * 2, 6)
-  slabSerif(p, x0 + dia / 2, dia, CAP, 'top', 16, 14, 16)
-  slabSerif(p, cx - dia / 2 + OV, dia, CAP, 'top', 14, 14, 16)
-  slabSerif(p, cx + dia / 2 - OV, dia, CAP, 'top', 14, 14, 16)
-  slabSerif(p, x0 + w - dia / 2, dia, CAP, 'top', 14, 16, 16)
+
+  legStroke(p, footL + OV, x0 + dia1 / 2, 0, CAP, dia1)
+  legStroke(p, footL - OV, cx - dia2 / 2 + OV, 0, CAP, dia2)
+  legStroke(p, footR + OV, cx + dia2 / 2 - OV, 0, CAP, dia2)
+  legStroke(p, footR - OV, x0 + w - dia1 / 2, 0, CAP, dia1)
+  rect(p, footL - dia1 * 0.4, 0, dia1 * 0.8, 6)
+  rect(p, footR - dia1 * 0.4, 0, dia1 * 0.8, 6)
+  rect(p, cx - dia2, CAP - 6, dia2 * 2, 6)
+
+  slabSerif(p, x0 + dia1 / 2, dia1, CAP, { side: 'top', extL: 22, extR: 18, height: 20 })
+  slabSerif(p, cx - dia2 / 2 + OV, dia2, CAP, { side: 'top', extL: 16, extR: 16, height: 20 })
+  slabSerif(p, cx + dia2 / 2 - OV, dia2, CAP, { side: 'top', extL: 16, extR: 16, height: 20 })
+  slabSerif(p, x0 + w - dia1 / 2, dia1, CAP, { side: 'top', extL: 18, extR: 22, height: 20 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- X ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// X — crossed diagonals with corner slab feet.
+// ---------------------------------------------------------------------------
 const X: Drawer = (p) => {
-  const w = CAP * 0.82
+  const w = CAP * 0.84
   const x0 = LSB
-  legStroke(p, x0, x0 + w, 0, CAP, THIN + 2)
-  legStroke(p, x0 + w, x0, 0, CAP, THIN + 2)
+  const dia1 = STEM - 14
+  const dia2 = THIN + 18
+  legStroke(p, x0, x0 + w, 0, CAP, dia1)
+  legStroke(p, x0 + w, x0, 0, CAP, dia2)
   const cx = x0 + w / 2
-  rect(p, cx - THIN * 0.4, CAP / 2 - THIN * 0.4, THIN * 0.8, THIN * 0.8)
-  slabSerif(p, x0, THIN + 2, 0, 'bottom', 22, 18, 16)
-  slabSerif(p, x0 + w, THIN + 2, 0, 'bottom', 18, 22, 16)
-  slabSerif(p, x0, THIN + 2, CAP, 'top', 22, 18, 16)
-  slabSerif(p, x0 + w, THIN + 2, CAP, 'top', 18, 22, 16)
+  rect(p, cx - 20, CAP / 2 - 20, 40, 40)
+
+  slabSerif(p, x0, dia1, 0, { side: 'bottom', extL: 28, extR: 22, height: 22 })
+  slabSerif(p, x0 + w, dia1, 0, { side: 'bottom', extL: 22, extR: 28, height: 22 })
+  slabSerif(p, x0, dia2, CAP, { side: 'top', extL: 28, extR: 22, height: 22 })
+  slabSerif(p, x0 + w, dia2, CAP, { side: 'top', extL: 22, extR: 28, height: 22 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- Y ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Y — two diagonals meet at mid-height, stem to baseline.
+// ---------------------------------------------------------------------------
 const Y: Drawer = (p) => {
   const w = CAP * 0.82
   const x0 = LSB
   const cx = x0 + w / 2
   const peakY = CAP * 0.46
-  const dia = THIN + 2
-  legStroke(p, cx - dia / 2 + OV, x0 + dia / 2, peakY, CAP, dia)
-  legStroke(p, cx + dia / 2 - OV, x0 + w - dia / 2, peakY, CAP, dia)
+  const diaL = STEM - 18
+  const diaR = THIN + 16
+
+  legStroke(p, cx - diaL / 2 + OV, x0 + diaL / 2, peakY, CAP, diaL)
+  legStroke(p, cx + diaR / 2 - OV, x0 + w - diaR / 2, peakY, CAP, diaR)
   rect(p, cx - STEM / 2, 0, STEM, peakY + OV)
-  rect(p, cx - dia, peakY - OV, dia * 2, OV * 2)
-  slabSerif(p, x0 + dia / 2, dia, CAP, 'top', 20, 18, 16)
-  slabSerif(p, x0 + w - dia / 2, dia, CAP, 'top', 18, 20, 16)
-  slabSerif(p, cx, STEM, 0, 'bottom')
+  rect(p, cx - diaL * 0.5, peakY - OV, diaL, OV * 2)
+
+  slabSerif(p, x0 + diaL / 2, diaL, CAP, { side: 'top', extL: 26, extR: 20, height: 22 })
+  slabSerif(p, x0 + w - diaR / 2, diaR, CAP, { side: 'top', extL: 20, extR: 26, height: 22 })
+  slabSerif(p, cx, STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- Z ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Z — two bars + diagonal.
+// ---------------------------------------------------------------------------
 const Z: Drawer = (p) => {
-  const w = CAP * 0.74
+  const w = CAP * 0.76
   const x0 = LSB
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  rect(p, x0, 0, w, THIN * 1.3)
-  legStroke(p, x0 + THIN * 0.4, x0 + w - THIN * 0.4, THIN * 1.3 - OV, CAP - THIN * 1.3 + OV, THIN + 4)
-  // Tick terminals
-  rect(p, x0, CAP - THIN * 1.3 - 10, 12, 10)
-  rect(p, x0 + w - 12, THIN * 1.3, 12, 10)
+  const barH = THIN + 36
+  rect(p, x0, CAP - barH, w, barH)
+  rect(p, x0, 0, w, barH)
+  legStroke(p, x0 + (THIN + 20) * 0.4, x0 + w - (THIN + 20) * 0.4, barH - OV, CAP - barH + OV, THIN + 38)
+
+  // Terminal drops top-left and bottom-right.
+  rect(p, x0, CAP - barH - 14, 16, 14)
+  rect(p, x0 + w - 16, barH, 16, 14)
+
   return { advance: LSB + w + RSB }
 }
 
@@ -712,598 +891,764 @@ const Z: Drawer = (p) => {
 // Lowercase helpers
 // ---------------------------------------------------------------------------
 
-// A light serif foot for lowercase stems — smaller than caps.
-function lcSerif(
-  p: opentype.Path,
-  cx: number,
-  stemW: number,
-  atY: number,
-  side: 'top' | 'bottom' = 'bottom',
-  extL = 18,
-  extR = 18,
-  h = 16,
-) {
-  slabSerif(p, cx, stemW, atY, side, extL, extR, h)
+// Slab foot for lowercase stems — uses LC_SERIF_* metrics.
+function lcFoot(p: opentype.Path, cx: number, stemW: number, atY: number, opts: { side?: 'top' | 'bottom', extL?: number, extR?: number, filletL?: boolean, filletR?: boolean } = {}) {
+  slabSerif(p, cx, stemW, atY, {
+    side: opts.side ?? 'bottom',
+    extL: opts.extL ?? LC_SERIF_EXT,
+    extR: opts.extR ?? LC_SERIF_EXT,
+    height: LC_SERIF_H,
+    filletL: opts.filletL,
+    filletR: opts.filletR,
+  })
 }
 
-// n-arch: vertical stem on left, curved arch to a right stem, from y=0 to y=yTop.
-function nArch(p: opentype.Path, x0: number, w: number, yTop: number, stemW = LC_STEM) {
-  const archR = (w - 2 * stemW) / 2 + stemW
-  const cx = x0 + w / 2
-  const archTop = yTop
-  const shoulderY = yTop - archR
-  // Left stem (full height)
-  rect(p, x0, 0, stemW, yTop)
-  // Right stem (ends at shoulderY)
-  rect(p, x0 + w - stemW, 0, stemW, shoulderY)
-  // Arch (half-ring top between the two stems, hollowed)
-  const rx = (w - 0) / 2
-  const ry = Math.min(archR, yTop * 0.55)
-  const thick = stemW
-  halfRing(p, cx, archTop - ry, rx, ry, thick, 'top')
-  // If halfRing yTop exceeds yTop limit, just ensure stems overlap
-  // Safety fill: small rect connecting top of right stem into arch
-  rect(p, x0 + w - stemW, shoulderY - OV, stemW, OV * 2)
-  rect(p, x0, archTop - ry - OV, stemW, OV * 2)
+// Head serif (flag) for ascender stems — slanted rect on the left top.
+function lcHeadSerif(p: opentype.Path, cx: number, stemW: number, top: number) {
+  // Small slanted flag extending upward and to the left of the stem top.
+  const flagW = LC_SERIF_EXT
+  const flagH = 22
+  legStroke(p, cx - stemW / 2 - flagW * 0.15, cx - stemW / 2 - flagW, top - 4, top + flagH, THIN + 18)
+  // And a small slab under the flag along the top of the stem.
+  rect(p, cx - stemW / 2 - 6, top - 6, stemW + 12, 12)
 }
 
-// Bowl centered between left & right of an o/c shape, fully closed.
-function oRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: number) {
-  ellipse(p, cx, cy, rx, ry)
-  ellipse(p, cx, cy, Math.max(1, rx - LC_STEM * 0.95), Math.max(1, ry - LC_THIN * 1.4), true)
+// drawLeftBowl — mirror of drawBowl. Closes onto a stem's LEFT edge. The
+// outer rim goes CCW on the left half of the ellipse; the inner counter
+// (if any) goes CW to punch out the bowl hollow.
+function drawLeftBowl(p: opentype.Path, stemLeftX: number, bottomY: number, w: number, h: number, stroke: number) {
+  const cy = bottomY + h / 2
+  const rx = w
+  const ry = h / 2
+  const k = KAPPA
+  const irx = Math.max(0, rx - stroke)
+  const iry = Math.max(0, ry - stroke * 0.9)
+  if (irx > 0 && iry > 0) {
+    // Outer: bottom-at-stem, around left, to top-at-stem.
+    p.moveTo(stemLeftX, cy + ry)
+    p.curveTo(stemLeftX - rx * k, cy + ry, stemLeftX - rx, cy + ry * k, stemLeftX - rx, cy)
+    p.curveTo(stemLeftX - rx, cy - ry * k, stemLeftX - rx * k, cy - ry, stemLeftX, cy - ry)
+    // Inner: top-at-stem, around (smaller) left, back to bottom-at-stem.
+    p.lineTo(stemLeftX, cy - iry)
+    p.curveTo(stemLeftX - irx * k, cy - iry, stemLeftX - irx, cy - iry * k, stemLeftX - irx, cy)
+    p.curveTo(stemLeftX - irx, cy + iry * k, stemLeftX - irx * k, cy + iry, stemLeftX, cy + iry)
+    p.lineTo(stemLeftX, cy + ry)
+    p.close()
+  }
+  else {
+    p.moveTo(stemLeftX, cy + ry)
+    p.curveTo(stemLeftX - rx * k, cy + ry, stemLeftX - rx, cy + ry * k, stemLeftX - rx, cy)
+    p.curveTo(stemLeftX - rx, cy - ry * k, stemLeftX - rx * k, cy - ry, stemLeftX, cy - ry)
+    p.lineTo(stemLeftX, cy + ry)
+    p.close()
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Lowercase drawers
+// a — two-storey: upper small bowl + larger bottom bowl stacked on the right
+//     stem. Both bowls are D-shapes that close back onto the stem's left edge.
 // ---------------------------------------------------------------------------
-
-// --- a (two-storey) ------------------------------------------------------
 const a: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = XH * 1.12
   const x0 = LSB
-  const cx = x0 + w / 2
-  // Right stem — full xh
-  rect(p, x0 + w - LC_STEM, 0, LC_STEM, XH)
-  // Lower bowl (full ellipse + hollow)
-  const bowlCY = XH * 0.34
-  const bowlRX = w / 2
-  const bowlRY = XH * 0.34
-  ellipse(p, cx, bowlCY, bowlRX, bowlRY)
-  ellipse(p, cx, bowlCY, Math.max(1, bowlRX - LC_STEM * 0.9), Math.max(1, bowlRY - LC_THIN * 1.2), true)
-  // Upper arc: outer half-ellipse forming the top-left curve of the a
-  const arcRY = XH * 0.36
-  const arcRX = w / 2
-  const arcCY = XH - arcRY
-  // Solid top-left quadrant: left half of a halfRing 'top' (thick stroke)
-  halfRing(p, cx, arcCY, arcRX, arcRY, LC_STEM * 0.95, 'top')
-  // The 'a' waist: small horizontal connection between bowl top and upper arc bottom
-  // (counter is the upper white space between the two)
-  // Ear — small tick at top-right
-  rect(p, x0 + w - LC_STEM - 6, XH - 14, 14, 14)
-  // Bottom serif on stem
-  lcSerif(p, x0 + w - LC_STEM / 2, LC_STEM, 0, 'bottom', 14, 18)
+  const stemX = x0 + w - LC_STEM
+  const stemCx = stemX + LC_STEM / 2
+  const stroke = LC_THIN + 34
+
+  // Right stem — full x-height.
+  rect(p, stemX, 0, LC_STEM, XH)
+
+  // Upper (smaller) bowl — about 45% of x-height, attached to stem LEFT edge.
+  const upperBowlH = XH * 0.48
+  const upperBowlW = w - LC_STEM - 10
+  drawLeftBowl(p, stemX, XH - upperBowlH, upperBowlW, upperBowlH, stroke)
+
+  // Lower (larger) bowl — about 55% of x-height, also on stem LEFT edge.
+  const lowerBowlH = XH * 0.58
+  const lowerBowlW = w - LC_STEM
+  drawLeftBowl(p, stemX, 0, lowerBowlW, lowerBowlH, stroke)
+
+  // Foot serif on stem.
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom', extL: LC_SERIF_EXT * 0.6, extR: LC_SERIF_EXT })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- b -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// b — ascender stem + round bowl at x-height.
+// ---------------------------------------------------------------------------
 const b: Drawer = (p) => {
-  const w = CAP * 0.64
+  const w = XH * 1.10
   const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
+  const stemCx = x0 + LC_STEM / 2
+  const stroke = LC_THIN + 36
+
   rect(p, x0, 0, LC_STEM, ASCENDER)
-  drawBowl(p, x0 + LC_STEM - OV, 0, w - LC_STEM, XH, LC_STEM * 0.95)
-  // Top serif (ascender)
-  slabSerif(p, cxS, LC_STEM, ASCENDER, 'top', SERIF_EXT - 4, 6, 16)
+
+  // Bowl sits on the stem's right from baseline up to XH.
+  const bowlH = XH
+  drawBowl(p, x0 + LC_STEM, 0, w - LC_STEM, bowlH, stroke)
+
+  // Top serif (flag-like) and foot serif on the stem.
+  slabSerif(p, stemCx, LC_STEM, ASCENDER, { side: 'top', extL: LC_SERIF_EXT, extR: 0, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom', extL: LC_SERIF_EXT, extR: 4 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- c -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// c — left half-ring (open on the right) with small beaked arms.
+// ---------------------------------------------------------------------------
 const c: Drawer = (p) => {
-  const w = CAP * 0.58
+  const w = XH * 1.04
   const x0 = LSB
   const cx = x0 + w / 2
-  halfRing(p, cx, XH / 2, w / 2, XH / 2, LC_STEM * 0.95, 'left')
-  // Short top / bottom terminals extending rightward from the ring
-  const termH = LC_THIN * 1.2
-  const termL = w * 0.24
-  rect(p, cx - OV, XH - termH, termL, termH)
-  rect(p, cx - OV, 0, termL, termH)
+  const cy = XH / 2
+  const rx = w / 2
+  const ry = XH / 2
+  const stroke = LC_THIN + 34
+
+  halfRing(p, cx, cy, rx, ry, stroke, 'left')
+
+  // Short top arm going right from the top of the half-ring.
+  const armLen = w * 0.18
+  rect(p, cx - 4, XH - stroke, armLen + 4, stroke)
+  // Short bottom arm.
+  rect(p, cx - 4, 0, armLen + 4, stroke)
+
+  // Drop terminals.
+  dropTerminal(p, cx + armLen, XH - stroke * 0.5, THIN + 20, THIN + 28)
+  dropTerminal(p, cx + armLen, stroke * 0.5, THIN + 20, THIN + 28)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- d -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// d — ascender stem on right, bowl closed onto stem's LEFT edge.
+// ---------------------------------------------------------------------------
 const d: Drawer = (p) => {
-  const w = CAP * 0.64
+  const w = XH * 1.12
   const x0 = LSB
-  const cxS = x0 + w - LC_STEM / 2
-  rect(p, x0 + w - LC_STEM, 0, LC_STEM, ASCENDER)
-  // Mirror bowl on left of stem
-  const cy = XH / 2
-  const rx = (w - LC_STEM) / 1
-  const ry = XH / 2
-  const k = KAPPA
-  const stroke = LC_STEM * 0.95
-  const irx = Math.max(0, rx - stroke)
-  const iry = Math.max(0, ry - stroke * 0.85)
-  const stemLeftX = x0 + w - LC_STEM + OV
-  if (irx > 0 && iry > 0) {
-    p.moveTo(stemLeftX, cy + ry)
-    p.curveTo(stemLeftX - rx * k, cy + ry, stemLeftX - rx, cy + ry * k, stemLeftX - rx, cy)
-    p.curveTo(stemLeftX - rx, cy - ry * k, stemLeftX - rx * k, cy - ry, stemLeftX, cy - ry)
-    p.lineTo(stemLeftX, cy - iry)
-    p.curveTo(stemLeftX - irx * k, cy - iry, stemLeftX - irx, cy - iry * k, stemLeftX - irx, cy)
-    p.curveTo(stemLeftX - irx, cy + iry * k, stemLeftX - irx * k, cy + iry, stemLeftX, cy + iry)
-    p.lineTo(stemLeftX, cy + ry)
-    p.close()
-  }
-  slabSerif(p, cxS, LC_STEM, ASCENDER, 'top', 6, SERIF_EXT - 4, 16)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom', 14, 18)
+  const stemX = x0 + w - LC_STEM
+  const stemCx = stemX + LC_STEM / 2
+  const stroke = LC_THIN + 36
+
+  rect(p, stemX, 0, LC_STEM, ASCENDER)
+  drawLeftBowl(p, stemX, 0, w - LC_STEM, XH, stroke)
+
+  slabSerif(p, stemCx, LC_STEM, ASCENDER, { side: 'top', extL: 0, extR: LC_SERIF_EXT, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom', extL: 4, extR: LC_SERIF_EXT })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- e -------------------------------------------------------------------
-// Outer ellipse + hollow inner, then a solid crossbar that closes the
-// upper counter. Use a rectangular mask INSIDE the bowl (inner bounds)
-// by drawing the bar fully within the inner ellipse.
+// ---------------------------------------------------------------------------
+// e — upper bowl closed at crossbar + open mouth below crossbar.
+//     We split this into (a) a top half-ring forming the top of the bowl,
+//     (b) a left half-ring filling the lower-left quadrant, (c) a crossbar
+//     and top arm stitching them together, and (d) a small drop terminal.
+// ---------------------------------------------------------------------------
 const e: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = XH * 1.02
   const x0 = LSB
   const cx = x0 + w / 2
-  const irx = Math.max(1, w / 2 - LC_STEM * 0.9)
-  const iry = Math.max(1, XH / 2 - LC_THIN * 1.2)
-  ellipse(p, cx, XH / 2, w / 2, XH / 2)
-  ellipse(p, cx, XH / 2, irx, iry, true)
-  // Crossbar — spans the inner counter at the optical center, closes upper counter
-  const barY = XH * 0.48
-  const barH = LC_THIN * 1.0
-  // Keep bar strictly inside the inner ellipse horizontally
-  const barX = cx - irx + 2
-  const barW = 2 * irx - 4
-  rect(p, barX, barY, barW, barH)
-  // Also fill the small slice that forms the aperture opening's lower-right
-  // (the gap where bowl meets terminal). Not drawing any opening here keeps
-  // the e as a closed upper counter + open lower aperture via the inner
-  // ellipse's lower half.
-  // Open the aperture: cut a small rect from the lower-right of the outer
-  // ring where the terminal would exit. But nonzero fill won't allow that
-  // easily without CW winding; instead we approximate by drawing the bar
-  // plus an additional thin rect reaching the inner boundary.
-  return { advance: LSB + w + RSB }
-}
-
-// --- f -------------------------------------------------------------------
-const f: Drawer = (p) => {
-  const w = CAP * 0.44
-  const x0 = LSB
-  const cx = x0 + LC_STEM / 2 + 6
-  // Stem
-  rect(p, cx - LC_STEM / 2, 0, LC_STEM, ASCENDER - LC_THIN * 1.4)
-  // Top curl (short arch over top-left)
-  const curlRX = w * 0.5
-  const curlRY = LC_THIN * 1.6
-  halfRing(p, cx + curlRX * 0.4, ASCENDER - curlRY, curlRX, curlRY, LC_STEM * 0.9, 'top')
-  // Crossbar at x-height
-  rect(p, cx - LC_STEM, XH - LC_THIN * 0.6, w, LC_THIN)
-  lcSerif(p, cx, LC_STEM, 0, 'bottom', 16, 16)
-  return { advance: LSB + w + RSB }
-}
-
-// --- g (two-storey) ------------------------------------------------------
-// Upper bowl + right stem extending from the bowl down to a horizontal
-// hook tail. The right stem is drawn first, then the bowl is attached
-// to its left side (so the stem becomes the right side of the bowl).
-const g: Drawer = (p) => {
-  const w = CAP * 0.62
-  const x0 = LSB
-  const cx = x0 + w / 2
-  // Right stem — full height from tail up to x-height
-  const tailY = DESCENDER + 40    // baseline of the tail
-  const tailH = LC_THIN * 1.5     // tail is thin like a horizontal serif
-  rect(p, x0 + w - LC_STEM, tailY, LC_STEM, XH - tailY)
-  // Upper bowl — ellipse
-  const bowlCY = XH / 2
-  const bowlRX = w / 2
-  const bowlRY = XH / 2
-  ellipse(p, cx, bowlCY, bowlRX, bowlRY)
-  ellipse(p, cx, bowlCY, Math.max(1, bowlRX - LC_STEM * 0.9), Math.max(1, bowlRY - LC_THIN * 1.2), true)
-  // Horizontal tail going LEFT from the stem
-  rect(p, x0 + LC_THIN * 0.6, tailY, w - LC_STEM - LC_THIN * 0.6, tailH)
-  // Small terminal drop at the left end of the tail
-  rect(p, x0 + LC_THIN * 0.6, tailY - LC_THIN * 0.4, LC_THIN * 1.4, tailH + LC_THIN * 0.4)
-  // Ear on upper right
-  rect(p, x0 + w - LC_STEM - 6, XH - 14, 16, 14)
-  return { advance: LSB + w + RSB }
-}
-
-// --- h -------------------------------------------------------------------
-const h: Drawer = (p) => {
-  const w = CAP * 0.68
-  const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, 0, LC_STEM, ASCENDER)
-  const archRY = XH * 0.55
-  const shoulderY = XH - archRY
-  rect(p, x0 + w - LC_STEM, 0, LC_STEM, shoulderY + OV)
-  halfRing(p, x0 + w / 2, shoulderY, w / 2, archRY, LC_STEM, 'top')
-  slabSerif(p, cxS, LC_STEM, ASCENDER, 'top', SERIF_EXT - 4, 6, SERIF_H - 2)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom')
-  lcSerif(p, x0 + w - LC_STEM / 2, LC_STEM, 0, 'bottom')
-  return { advance: LSB + w + RSB }
-}
-
-// --- i -------------------------------------------------------------------
-const i: Drawer = (p) => {
-  const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, 0, LC_STEM, XH)
-  // Dot (tittle)
-  const dotR = LC_STEM * 0.55
-  ellipse(p, cxS, XH + LC_STEM * 0.9, dotR, dotR)
-  slabSerif(p, cxS, LC_STEM, XH, 'top', 8, 8, 14)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom')
-  return { advance: LSB + LC_STEM + 20 + RSB }
-}
-
-// --- j -------------------------------------------------------------------
-const j: Drawer = (p) => {
-  const w = CAP * 0.38
-  const x0 = LSB
-  const cxS = x0 + w / 2 + 2
-  rect(p, cxS - LC_STEM / 2, DESCENDER + 80, LC_STEM, XH - (DESCENDER + 80))
-  // Hook bottom
-  halfRing(p, cxS - w * 0.2, DESCENDER + 80, w * 0.4, 60, LC_STEM * 0.85, 'bottom')
-  // Dot
-  ellipse(p, cxS, XH + LC_STEM * 0.9, LC_STEM * 0.55, LC_STEM * 0.55)
-  slabSerif(p, cxS, LC_STEM, XH, 'top', 8, 8, 14)
-  return { advance: LSB + w + RSB }
-}
-
-// --- k -------------------------------------------------------------------
-const k: Drawer = (p) => {
-  const w = CAP * 0.62
-  const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, 0, LC_STEM, ASCENDER)
-  const midY = XH * 0.42
-  legStroke(p, x0 + LC_STEM - OV, x0 + w - LC_THIN * 0.3, midY, XH, LC_THIN * 1.1)
-  legStroke(p, x0 + w - LC_STEM * 0.4, x0 + LC_STEM - OV, 0, midY, LC_STEM * 0.85)
-  rect(p, x0 + w - 10, XH - 10, 12, 10)
-  slabSerif(p, cxS, LC_STEM, ASCENDER, 'top', SERIF_EXT - 4, 6, 16)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom', 18, 0)
-  lcSerif(p, x0 + w - LC_STEM * 0.4, LC_STEM * 0.6, 0, 'bottom', 8, 16)
-  return { advance: LSB + w + RSB }
-}
-
-// --- l -------------------------------------------------------------------
-const l: Drawer = (p) => {
-  const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, 0, LC_STEM, ASCENDER)
-  slabSerif(p, cxS, LC_STEM, ASCENDER, 'top', SERIF_EXT - 4, 6, 16)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom')
-  return { advance: LSB + LC_STEM + 18 + RSB }
-}
-
-// --- m -------------------------------------------------------------------
-// Built from two n-arches sharing the middle stem.
-const m: Drawer = (p) => {
-  const archRY = XH * 0.55
-  const shoulderY = XH - archRY
-  const barWidth = CAP * 0.48 // one n-arch width
-  const w = barWidth * 2 - LC_STEM
-  const x0 = LSB
-  // Three stems up to shoulderY (middle stem shared)
-  rect(p, x0, 0, LC_STEM, shoulderY + OV)
-  rect(p, x0 + barWidth - LC_STEM, 0, LC_STEM, shoulderY + OV)
-  rect(p, x0 + w - LC_STEM, 0, LC_STEM, shoulderY + OV)
-  // Two arches
-  halfRing(p, x0 + barWidth / 2, shoulderY, barWidth / 2, archRY, LC_STEM, 'top')
-  halfRing(p, x0 + barWidth - LC_STEM / 2 + (barWidth - LC_STEM) / 2, shoulderY, (barWidth) / 2, archRY, LC_STEM, 'top')
-  lcSerif(p, x0 + LC_STEM / 2, LC_STEM, 0, 'bottom')
-  lcSerif(p, x0 + barWidth - LC_STEM / 2, LC_STEM, 0, 'bottom')
-  lcSerif(p, x0 + w - LC_STEM / 2, LC_STEM, 0, 'bottom')
-  return { advance: LSB + w + RSB }
-}
-
-// --- n -------------------------------------------------------------------
-// Arch is the FULL top half of an ellipse — its vertical legs ARE the
-// stems from shoulderY up to XH. The standalone rects only fill the stems
-// from 0 up to shoulderY+OV to avoid double-drawing the arch legs.
-const n: Drawer = (p) => {
-  const w = CAP * 0.66
-  const x0 = LSB
-  const archRY = XH * 0.55
-  const shoulderY = XH - archRY
-  // Stems from baseline up to shoulder
-  rect(p, x0, 0, LC_STEM, shoulderY + OV)
-  rect(p, x0 + w - LC_STEM, 0, LC_STEM, shoulderY + OV)
-  // Arch — outer radii meet stem outer edges
-  halfRing(p, x0 + w / 2, shoulderY, w / 2, archRY, LC_STEM, 'top')
-  lcSerif(p, x0 + LC_STEM / 2, LC_STEM, 0, 'bottom')
-  lcSerif(p, x0 + w - LC_STEM / 2, LC_STEM, 0, 'bottom')
-  return { advance: LSB + w + RSB }
-}
-
-// --- o -------------------------------------------------------------------
-const o: Drawer = (p) => {
-  const w = CAP * 0.62
-  const x0 = LSB
-  const cx = x0 + w / 2
-  oRing(p, cx, XH / 2, w / 2, XH / 2)
-  return { advance: LSB + w + RSB }
-}
-
-// --- p -------------------------------------------------------------------
-const pGlyph: Drawer = (p) => {
-  const w = CAP * 0.64
-  const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, DESCENDER, LC_STEM, XH - DESCENDER)
-  drawBowl(p, x0 + LC_STEM - OV, 0, w - LC_STEM, XH, LC_STEM * 0.95)
-  slabSerif(p, cxS, LC_STEM, XH, 'top', SERIF_EXT - 4, 4, 14)
-  lcSerif(p, cxS, LC_STEM, DESCENDER, 'bottom', 14, 14)
-  return { advance: LSB + w + RSB }
-}
-
-// --- q -------------------------------------------------------------------
-const q: Drawer = (p) => {
-  const w = CAP * 0.64
-  const x0 = LSB
-  const cxS = x0 + w - LC_STEM / 2
-  rect(p, x0 + w - LC_STEM, DESCENDER, LC_STEM, XH - DESCENDER)
-  // Bowl on left
   const cy = XH / 2
-  const rx = (w - LC_STEM)
+  const rx = w / 2
   const ry = XH / 2
-  const k = KAPPA
-  const stroke = LC_STEM * 0.95
-  const irx = Math.max(0, rx - stroke)
-  const iry = Math.max(0, ry - stroke * 0.85)
-  const stemLeftX = x0 + w - LC_STEM + OV
-  if (irx > 0 && iry > 0) {
-    p.moveTo(stemLeftX, cy + ry)
-    p.curveTo(stemLeftX - rx * k, cy + ry, stemLeftX - rx, cy + ry * k, stemLeftX - rx, cy)
-    p.curveTo(stemLeftX - rx, cy - ry * k, stemLeftX - rx * k, cy - ry, stemLeftX, cy - ry)
-    p.lineTo(stemLeftX, cy - iry)
-    p.curveTo(stemLeftX - irx * k, cy - iry, stemLeftX - irx, cy - iry * k, stemLeftX - irx, cy)
-    p.curveTo(stemLeftX - irx, cy + iry * k, stemLeftX - irx * k, cy + iry, stemLeftX, cy + iry)
-    p.lineTo(stemLeftX, cy + ry)
-    p.close()
-  }
-  slabSerif(p, cxS, LC_STEM, XH, 'top', 4, SERIF_EXT - 4, 14)
-  lcSerif(p, cxS, LC_STEM, DESCENDER, 'bottom', 14, 14)
+  const stroke = LC_THIN + 34
+  const barY = cy + 6                        // crossbar sits slightly above middle
+
+  // Top half-ring (forms the TOP of the e — outer and inner contours).
+  halfRing(p, cx, barY, rx, XH - barY, stroke, 'top')
+  // Bottom half-ring (forms the bottom curve, open on the right).
+  halfRing(p, cx, barY, rx, barY, stroke, 'bottom')
+  // Crossbar — solid rect joining them.
+  rect(p, x0 + stroke * 0.5, barY - (THIN + 14) / 2, w - stroke * 1.0, THIN + 14)
+  // Carve right mouth below bar with a CCW rect that erases via winding —
+  // instead of relying on winding carving, we simply don't draw anything
+  // there. The bottom half-ring is already open on the right.
+
+  // Small drop at lower terminal.
+  dropTerminal(p, cx + rx * 0.55, stroke * 0.4, THIN + 18, THIN + 26)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- r -------------------------------------------------------------------
-const r: Drawer = (p) => {
-  const w = CAP * 0.46
+// ---------------------------------------------------------------------------
+// f — ascender stem with top hook and crossbar at x-height.
+// ---------------------------------------------------------------------------
+const f: Drawer = (p) => {
+  const w = XH * 0.70
   const x0 = LSB
-  const cxS = x0 + LC_STEM / 2
-  rect(p, x0, 0, LC_STEM, XH)
-  // Shoulder arc — little flag off the top
-  const shRX = w - LC_STEM
-  const shRY = LC_THIN * 1.5
-  halfRing(p, x0 + LC_STEM + shRX * 0.35, XH - shRY, shRX * 0.8, shRY, LC_STEM * 0.85, 'top')
-  // Tiny terminal serif on arc
-  rect(p, x0 + w - 10, XH - 14, 10, 14)
-  lcSerif(p, cxS, LC_STEM, 0, 'bottom')
+  const stemCx = x0 + LC_STEM / 2 + 14
+  const stroke = LC_THIN + 32
+
+  // Main stem up through ascender.
+  rect(p, stemCx - LC_STEM / 2, 0, LC_STEM, ASCENDER - 40)
+
+  // Top curl: a small half-ring arcing left then down at the very top.
+  halfRing(p, stemCx - 14, ASCENDER - 40, 28, 40, stroke, 'top')
+  // End drop on hook.
+  dropTerminal(p, stemCx - 42, ASCENDER - 54, THIN + 20, THIN + 28)
+
+  // Crossbar at x-height.
+  rect(p, stemCx - LC_STEM / 2 - 30, XH - 14, LC_STEM + 48, THIN + 18)
+
+  // Foot serif.
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- s -------------------------------------------------------------------
-const s: Drawer = (p) => {
-  const w = CAP * 0.52
+// ---------------------------------------------------------------------------
+// g — single-storey bowl at x-height + looped descender tail (bookish).
+//     The bowl is a D-shape on a right stem, and the descender below the
+//     baseline is a short U-bottom bowl that hangs from the stem.
+// ---------------------------------------------------------------------------
+const g: Drawer = (p) => {
+  const w = XH * 1.14
+  const x0 = LSB
+  const stemX = x0 + w - LC_STEM
+  const stemCx = stemX + LC_STEM / 2
+  const stroke = LC_THIN + 34
+
+  // Right stem: from the top of the descender hook up to x-height.
+  const hookTopY = DESCENDER + 60
+  rect(p, stemX, hookTopY, LC_STEM, XH - hookTopY)
+
+  // Upper bowl, attached to stem's LEFT edge.
+  drawLeftBowl(p, stemX, 0, w - LC_STEM, XH, stroke)
+
+  // Descender hook: short U-bowl hanging from the stem, opening left.
+  const hookDepth = hookTopY - DESCENDER
+  drawBottomBowl(p, stemX - (w - LC_STEM) * 0.7, stemX + LC_STEM, hookTopY, hookDepth, stroke * 0.9)
+  // Small drop at the left end of the hook.
+  dropTerminal(p, stemX - (w - LC_STEM) * 0.6, hookTopY - hookDepth + stroke * 0.4, THIN + 18, THIN + 26)
+
+  // Small ear at top-right of bowl.
+  rect(p, stemX + LC_STEM - OV, XH - 20, 22, 20)
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// h — ascender stem + shoulder arch to a second stem.
+// ---------------------------------------------------------------------------
+const h: Drawer = (p) => {
+  const w = XH * 1.14
+  const x0 = LSB
+  const stroke = LC_THIN + 34
+  const stemCx = x0 + LC_STEM / 2
+
+  rect(p, x0, 0, LC_STEM, ASCENDER)
+
+  // Shoulder arch: top halfRing from stem into a right stem.
+  const rightStemCx = x0 + w - LC_STEM / 2
+  const archCY = XH - XH * 0.32
+  const archRX = (rightStemCx - stemCx) / 2
+  const archCX = stemCx + archRX
+  halfRing(p, archCX, archCY, archRX, XH * 0.32, stroke, 'top')
+  // Right stem.
+  rect(p, x0 + w - LC_STEM, 0, LC_STEM, archCY + OV)
+
+  slabSerif(p, stemCx, LC_STEM, ASCENDER, { side: 'top', extL: LC_SERIF_EXT, extR: 0, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+  lcFoot(p, rightStemCx, LC_STEM, 0, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// i — stem + dot.
+// ---------------------------------------------------------------------------
+const i: Drawer = (p) => {
+  const w = LC_STEM + LC_SERIF_EXT * 2
+  const x0 = LSB
+  const stemCx = x0 + w / 2
+
+  rect(p, stemCx - LC_STEM / 2, 0, LC_STEM, XH)
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.6, extR: LC_SERIF_EXT * 0.6, height: 20 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+
+  // Dot above at ascender region.
+  const dotR = LC_STEM * 0.55
+  ellipse(p, stemCx, ASCENDER - dotR - 6, dotR, dotR)
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// j — descending stem with dot.
+// ---------------------------------------------------------------------------
+const j: Drawer = (p) => {
+  const w = LC_STEM + LC_SERIF_EXT * 2
+  const x0 = LSB
+  const stemCx = x0 + w / 2 + 10
+  const hookBotY = DESCENDER + 30
+  const hookCY = hookBotY + LC_STEM * 0.4
+
+  rect(p, stemCx - LC_STEM / 2, hookCY, LC_STEM, XH - hookCY)
+  halfRing(p, stemCx - (w * 0.28), hookCY, w * 0.32, (hookCY - hookBotY) + LC_STEM * 0.3, LC_STEM * 0.9, 'bottom')
+
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.6, extR: LC_SERIF_EXT * 0.6, height: 20 })
+
+  // Dot above at ascender region.
+  const dotR = LC_STEM * 0.55
+  ellipse(p, stemCx, ASCENDER - dotR - 6, dotR, dotR)
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// k — ascender stem with small diagonals.
+// ---------------------------------------------------------------------------
+const k: Drawer = (p) => {
+  const w = XH * 1.04
+  const x0 = LSB
+  const stemCx = x0 + LC_STEM / 2
+
+  rect(p, x0, 0, LC_STEM, ASCENDER)
+  const midY = XH * 0.46
+
+  legStroke(p, x0 + LC_STEM - 4, x0 + w - (LC_THIN * 0.4), midY, XH, LC_THIN + 10)
+  legStroke(p, x0 + w, x0 + LC_STEM - 4, 0, midY, LC_STEM - 16)
+
+  // Foot rect on leg.
+  rect(p, x0 + w - 20, 0, 26, LC_SERIF_H)
+
+  slabSerif(p, stemCx, LC_STEM, ASCENDER, { side: 'top', extL: LC_SERIF_EXT, extR: 0, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom', extR: 0 })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// l — simple ascender stem.
+// ---------------------------------------------------------------------------
+const l: Drawer = (p) => {
+  const w = LC_STEM + LC_SERIF_EXT * 2
+  const x0 = LSB
+  const stemCx = x0 + w / 2
+
+  rect(p, stemCx - LC_STEM / 2, 0, LC_STEM, ASCENDER)
+  slabSerif(p, stemCx, LC_STEM, ASCENDER, { side: 'top', extL: LC_SERIF_EXT, extR: 0, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// m — three stems with two shoulder arches.
+// ---------------------------------------------------------------------------
+const m: Drawer = (p) => {
+  const w = XH * 1.66
+  const x0 = LSB
+  const stroke = LC_THIN + 32
+
+  const cxA = x0 + LC_STEM / 2
+  const cxB = x0 + w / 2
+  const cxC = x0 + w - LC_STEM / 2
+
+  rect(p, x0, 0, LC_STEM, XH)
+  rect(p, cxB - LC_STEM / 2, 0, LC_STEM, XH)
+  rect(p, x0 + w - LC_STEM, 0, LC_STEM, XH)
+
+  // Two arches.
+  const archCY = XH - XH * 0.30
+  const archRX1 = (cxB - cxA) / 2
+  const archRX2 = (cxC - cxB) / 2
+  halfRing(p, cxA + archRX1, archCY, archRX1, XH * 0.30, stroke, 'top')
+  halfRing(p, cxB + archRX2, archCY, archRX2, XH * 0.30, stroke, 'top')
+
+  lcFoot(p, cxA, LC_STEM, 0, { side: 'bottom' })
+  lcFoot(p, cxB, LC_STEM, 0, { side: 'bottom' })
+  lcFoot(p, cxC, LC_STEM, 0, { side: 'bottom' })
+  // Small top serif on first stem.
+  slabSerif(p, cxA, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.8, extR: 0, height: 20 })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// n — left stem + shoulder arch + right stem.
+// ---------------------------------------------------------------------------
+const n: Drawer = (p) => {
+  const w = XH * 1.14
+  const x0 = LSB
+  const stroke = LC_THIN + 34
+  const stemCx = x0 + LC_STEM / 2
+  const rightStemCx = x0 + w - LC_STEM / 2
+
+  rect(p, x0, 0, LC_STEM, XH)
+  rect(p, x0 + w - LC_STEM, 0, LC_STEM, XH)
+
+  const archCY = XH - XH * 0.32
+  const archRX = (rightStemCx - stemCx) / 2
+  halfRing(p, stemCx + archRX, archCY, archRX, XH * 0.32, stroke, 'top')
+
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.8, extR: 0, height: 20 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+  lcFoot(p, rightStemCx, LC_STEM, 0, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// o — round bowl at x-height.
+// ---------------------------------------------------------------------------
+const o: Drawer = (p) => {
+  const w = XH * 1.06
   const x0 = LSB
   const cx = x0 + w / 2
-  const upperCY = XH * 0.72
-  const lowerCY = XH * 0.28
+  stressedRing(p, cx, XH / 2, w / 2, XH / 2, LC_THIN + 36)
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// p — stem descending below baseline + bowl at x-height.
+// ---------------------------------------------------------------------------
+const pGlyph: Drawer = (p) => {
+  const w = XH * 1.14
+  const x0 = LSB
+  const stemCx = x0 + LC_STEM / 2
+  const stroke = LC_THIN + 36
+
+  rect(p, x0, DESCENDER, LC_STEM, XH - DESCENDER)
+
+  drawBowl(p, x0 + LC_STEM, 0, w - LC_STEM, XH, stroke)
+
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT, extR: 0, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, DESCENDER, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// q — stem descending below baseline + bowl on stem's LEFT edge.
+// ---------------------------------------------------------------------------
+const q: Drawer = (p) => {
+  const w = XH * 1.14
+  const x0 = LSB
+  const stemX = x0 + w - LC_STEM
+  const stemCx = stemX + LC_STEM / 2
+  const stroke = LC_THIN + 36
+
+  rect(p, stemX, DESCENDER, LC_STEM, XH - DESCENDER)
+  drawLeftBowl(p, stemX, 0, w - LC_STEM, XH, stroke)
+
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: 0, extR: LC_SERIF_EXT, height: 22 })
+  lcFoot(p, stemCx, LC_STEM, DESCENDER, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// r — stem + short shoulder hook.
+// ---------------------------------------------------------------------------
+const r: Drawer = (p) => {
+  const w = XH * 0.84
+  const x0 = LSB
+  const stemCx = x0 + LC_STEM / 2
+  const stroke = LC_THIN + 32
+
+  rect(p, x0, 0, LC_STEM, XH)
+
+  // Short arch hook from stem top going right and down.
+  const archCY = XH - XH * 0.30
+  const archRX = (w - LC_STEM) * 0.72
+  halfRing(p, x0 + LC_STEM + archRX * 0.2, archCY, archRX, XH * 0.30, stroke, 'top')
+  // Drop terminal at hook end.
+  dropTerminal(p, x0 + LC_STEM + archRX * 0.95, archCY + 6, THIN + 22, THIN + 30)
+
+  slabSerif(p, stemCx, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.8, extR: 0, height: 20 })
+  lcFoot(p, stemCx, LC_STEM, 0, { side: 'bottom' })
+
+  return { advance: LSB + w + RSB }
+}
+
+// ---------------------------------------------------------------------------
+// s — lowercase S (like the cap S but smaller).
+// ---------------------------------------------------------------------------
+const s: Drawer = (p) => {
+  const w = XH * 0.92
+  const x0 = LSB
+  const cx = x0 + w / 2
   const rx = w / 2
   const ry = XH * 0.28
-  halfRing(p, cx, upperCY, rx, ry, LC_STEM * 0.9, 'top')
-  halfRing(p, cx, lowerCY, rx, ry, LC_STEM * 0.9, 'bottom')
-  legStroke(p, x0 + w - LC_STEM * 0.45, x0 + LC_STEM * 0.45, lowerCY - LC_STEM * 0.1, upperCY + LC_STEM * 0.1, LC_STEM * 0.85)
+  const upperCY = XH - ry
+  const lowerCY = ry
+  const stroke = LC_THIN + 34
+
+  halfRing(p, cx, upperCY, rx, ry, stroke, 'top')
+  halfRing(p, cx, lowerCY, rx, ry, stroke, 'bottom')
+  legStroke(p, x0 + w - stroke * 0.45, x0 + stroke * 0.45, lowerCY - 4, upperCY + 4, stroke * 0.95)
+
+  dropTerminal(p, x0 + w - stroke / 2, upperCY + 6, THIN + 22, THIN + 30)
+  dropTerminal(p, x0 + stroke / 2, lowerCY - 6, THIN + 22, THIN + 30)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- t -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// t — short ascender stem with crossbar and hook foot.
+// ---------------------------------------------------------------------------
 const t: Drawer = (p) => {
-  const w = CAP * 0.42
+  const w = XH * 0.72
   const x0 = LSB
-  const cxS = x0 + LC_STEM / 2 + 6
-  const topY = XH + 140
-  rect(p, cxS - LC_STEM / 2, 0, LC_STEM, topY)
-  // Crossbar at x-height
-  rect(p, x0, XH - LC_THIN * 0.6, w, LC_THIN)
-  // Bottom right curve (like j hook but smaller)
-  halfRing(p, cxS + LC_STEM * 0.4, LC_STEM * 0.4, LC_STEM * 0.6, LC_STEM * 0.5, LC_STEM * 0.5, 'bottom')
+  const stemCx = x0 + LC_STEM / 2 + 10
+  const topY = XH + 120
+
+  rect(p, stemCx - LC_STEM / 2, 0, LC_STEM, topY)
+
+  // Crossbar at x-height.
+  rect(p, stemCx - LC_STEM / 2 - 28, XH - 14, LC_STEM + 50, THIN + 18)
+
+  // Little hook at foot.
+  rect(p, stemCx + LC_STEM / 2 - OV, 0, 22, LC_THIN + 20)
+  dropTerminal(p, stemCx + LC_STEM / 2 + 20, LC_THIN + 12, THIN + 20, THIN + 28)
+
   return { advance: LSB + w + RSB }
 }
 
-// --- u -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// u — two stems joined by a bottom bowl, with a little right-stem finial.
+// ---------------------------------------------------------------------------
 const u: Drawer = (p) => {
-  const w = CAP * 0.66
+  const w = XH * 1.14
   const x0 = LSB
-  const cxL = x0 + LC_STEM / 2
-  const cxR = x0 + w - LC_STEM / 2
-  const stemBot = XH * 0.28
-  rect(p, x0, stemBot, LC_STEM, XH - stemBot)
+  const stroke = LC_THIN + 34
+  const stemBottom = XH * 0.28
+  const stemCxL = x0 + LC_STEM / 2
+  const stemCxR = x0 + w - LC_STEM / 2
+
+  rect(p, x0, stemBottom, LC_STEM, XH - stemBottom)
   rect(p, x0 + w - LC_STEM, 0, LC_STEM, XH)
-  drawBottomBowl(p, x0, x0 + w, stemBot + OV, stemBot, LC_STEM * 0.95)
-  slabSerif(p, cxL, LC_STEM, XH, 'top', 16, 6, 14)
-  slabSerif(p, cxR, LC_STEM, XH, 'top', 6, 16, 14)
-  lcSerif(p, cxR, LC_STEM, 0, 'bottom')
+  drawBottomBowl(p, x0, x0 + w, stemBottom, stemBottom, stroke)
+
+  slabSerif(p, stemCxL, LC_STEM, XH, { side: 'top', extL: LC_SERIF_EXT * 0.8, extR: 0, height: 20 })
+  slabSerif(p, stemCxR, LC_STEM, XH, { side: 'top', extL: 0, extR: LC_SERIF_EXT * 0.8, height: 20 })
+  lcFoot(p, stemCxR, LC_STEM, 0, { side: 'bottom' })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- v -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v — two diagonals meeting at baseline.
+// ---------------------------------------------------------------------------
 const v: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = XH * 1.10
   const x0 = LSB
   const cx = x0 + w / 2
-  const dia = LC_THIN + 4
-  legStroke(p, cx + OV, x0 + dia / 2, 0, XH, dia)
-  legStroke(p, cx - OV, x0 + w - dia / 2, 0, XH, dia)
-  rect(p, cx - dia, 0, dia * 2, 4)
-  slabSerif(p, x0 + dia / 2, dia, XH, 'top', 14, 12, 12)
-  slabSerif(p, x0 + w - dia / 2, dia, XH, 'top', 12, 14, 12)
+  const diaL = LC_STEM - 14
+  const diaR = LC_THIN + 12
+
+  legStroke(p, cx + OV, x0 + diaL / 2, 0, XH, diaL)
+  legStroke(p, cx - OV, x0 + w - diaR / 2, 0, XH, diaR)
+  rect(p, cx - diaL * 0.4, 0, diaL * 0.8, 6)
+
+  slabSerif(p, x0 + diaL / 2, diaL, XH, { side: 'top', extL: 20, extR: 16, height: 18 })
+  slabSerif(p, x0 + w - diaR / 2, diaR, XH, { side: 'top', extL: 16, extR: 20, height: 18 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- w -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// w — four diagonals.
+// ---------------------------------------------------------------------------
 const w: Drawer = (p) => {
-  const W_ = CAP * 0.94
+  const w_ = XH * 1.58
   const x0 = LSB
-  const cx = x0 + W_ / 2
-  const dia = LC_THIN * 0.9
-  const footL = x0 + W_ * 0.28
-  const footR = x0 + W_ * 0.72
-  legStroke(p, footL + OV, x0 + dia / 2, 0, XH, dia)
-  legStroke(p, footL - OV, cx - dia / 2 + OV, 0, XH, dia)
-  legStroke(p, footR + OV, cx + dia / 2 - OV, 0, XH, dia)
-  legStroke(p, footR - OV, x0 + W_ - dia / 2, 0, XH, dia)
-  rect(p, footL - dia, 0, dia * 2, 4)
-  rect(p, footR - dia, 0, dia * 2, 4)
-  rect(p, cx - dia, XH - 5, dia * 2, 5)
-  slabSerif(p, x0 + dia / 2, dia, XH, 'top', 12, 10, 12)
-  slabSerif(p, cx - dia / 2 + OV, dia, XH, 'top', 10, 10, 12)
-  slabSerif(p, cx + dia / 2 - OV, dia, XH, 'top', 10, 10, 12)
-  slabSerif(p, x0 + W_ - dia / 2, dia, XH, 'top', 10, 12, 12)
-  return { advance: LSB + W_ + RSB }
+  const dia1 = LC_STEM - 22
+  const dia2 = LC_THIN + 10
+  const cx = x0 + w_ / 2
+  const footL = x0 + w_ * 0.28
+  const footR = x0 + w_ * 0.72
+
+  legStroke(p, footL + OV, x0 + dia1 / 2, 0, XH, dia1)
+  legStroke(p, footL - OV, cx - dia2 / 2 + OV, 0, XH, dia2)
+  legStroke(p, footR + OV, cx + dia2 / 2 - OV, 0, XH, dia2)
+  legStroke(p, footR - OV, x0 + w_ - dia1 / 2, 0, XH, dia1)
+  rect(p, footL - dia1 * 0.4, 0, dia1 * 0.8, 6)
+  rect(p, footR - dia1 * 0.4, 0, dia1 * 0.8, 6)
+  rect(p, cx - dia2, XH - 6, dia2 * 2, 6)
+
+  slabSerif(p, x0 + dia1 / 2, dia1, XH, { side: 'top', extL: 18, extR: 14, height: 18 })
+  slabSerif(p, cx - dia2 / 2 + OV, dia2, XH, { side: 'top', extL: 14, extR: 14, height: 18 })
+  slabSerif(p, cx + dia2 / 2 - OV, dia2, XH, { side: 'top', extL: 14, extR: 14, height: 18 })
+  slabSerif(p, x0 + w_ - dia1 / 2, dia1, XH, { side: 'top', extL: 14, extR: 18, height: 18 })
+
+  return { advance: LSB + w_ + RSB }
 }
 
-// --- x -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// x — two crossed diagonals with small corner slabs.
+// ---------------------------------------------------------------------------
 const x: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = XH * 1.00
   const x0 = LSB
-  legStroke(p, x0, x0 + w, 0, XH, LC_THIN + 2)
-  legStroke(p, x0 + w, x0, 0, XH, LC_THIN + 2)
+  const dia1 = LC_STEM - 18
+  const dia2 = LC_THIN + 12
+  legStroke(p, x0, x0 + w, 0, XH, dia1)
+  legStroke(p, x0 + w, x0, 0, XH, dia2)
   const cx = x0 + w / 2
-  rect(p, cx - LC_THIN * 0.4, XH / 2 - LC_THIN * 0.4, LC_THIN * 0.8, LC_THIN * 0.8)
-  slabSerif(p, x0, LC_THIN + 2, 0, 'bottom', 14, 12, 12)
-  slabSerif(p, x0 + w, LC_THIN + 2, 0, 'bottom', 12, 14, 12)
-  slabSerif(p, x0, LC_THIN + 2, XH, 'top', 14, 12, 12)
-  slabSerif(p, x0 + w, LC_THIN + 2, XH, 'top', 12, 14, 12)
+  rect(p, cx - 16, XH / 2 - 16, 32, 32)
+
+  slabSerif(p, x0, dia1, 0, { side: 'bottom', extL: 22, extR: 18, height: 18 })
+  slabSerif(p, x0 + w, dia1, 0, { side: 'bottom', extL: 18, extR: 22, height: 18 })
+  slabSerif(p, x0, dia2, XH, { side: 'top', extL: 22, extR: 18, height: 18 })
+  slabSerif(p, x0 + w, dia2, XH, { side: 'top', extL: 18, extR: 22, height: 18 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- y -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// y — two diagonals with descender.
+// ---------------------------------------------------------------------------
 const y: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = XH * 1.10
   const x0 = LSB
   const cx = x0 + w / 2
-  const dia = LC_THIN + 4
-  // Right leg full to baseline then continues as descender
-  legStroke(p, x0 + w - dia / 2 + 4, x0 + w - dia / 2, DESCENDER + 30, XH, dia)
-  // Left leg stops at junction
-  const junctionY = XH * 0.28
-  legStroke(p, cx - dia + OV, x0 + dia / 2, junctionY, XH, dia)
-  // Fill junction
-  rect(p, cx - dia, junctionY - OV, (x0 + w - dia / 2) - (cx - dia), dia)
-  slabSerif(p, x0 + dia / 2, dia, XH, 'top', 14, 12, 12)
-  slabSerif(p, x0 + w - dia / 2, dia, XH, 'top', 12, 14, 12)
+  const diaL = LC_STEM - 14
+  const diaR = LC_THIN + 12
+
+  // Left diagonal: from top-left down to just above baseline meeting point.
+  legStroke(p, cx + OV, x0 + diaL / 2, XH * 0.05, XH, diaL)
+  // Right diagonal continues all the way down into the descender.
+  legStroke(p, x0 + w * 0.18, x0 + w - diaR / 2, DESCENDER + 20, XH, diaR)
+  // Join small block.
+  rect(p, cx - diaL * 0.4, XH * 0.05, diaL * 0.8, 8)
+  // Descender tail finial.
+  dropTerminal(p, x0 + w * 0.18 - 6, DESCENDER + 28, THIN + 20, THIN + 26)
+
+  slabSerif(p, x0 + diaL / 2, diaL, XH, { side: 'top', extL: 20, extR: 16, height: 18 })
+  slabSerif(p, x0 + w - diaR / 2, diaR, XH, { side: 'top', extL: 16, extR: 20, height: 18 })
+
   return { advance: LSB + w + RSB }
 }
 
-// --- z -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// z — lowercase Z.
+// ---------------------------------------------------------------------------
 const z: Drawer = (p) => {
-  const w = CAP * 0.56
+  const w = XH * 0.96
   const x0 = LSB
-  rect(p, x0, XH - LC_THIN * 1.3, w, LC_THIN * 1.3)
-  rect(p, x0, 0, w, LC_THIN * 1.3)
-  legStroke(p, x0 + LC_THIN * 0.4, x0 + w - LC_THIN * 0.4, LC_THIN * 1.3 - OV, XH - LC_THIN * 1.3 + OV, LC_THIN + 4)
+  const barH = LC_THIN + 30
+  rect(p, x0, XH - barH, w, barH)
+  rect(p, x0, 0, w, barH)
+  legStroke(p, x0 + (LC_THIN + 16) * 0.4, x0 + w - (LC_THIN + 16) * 0.4, barH - OV, XH - barH + OV, LC_THIN + 28)
+
+  rect(p, x0, XH - barH - 12, 14, 12)
+  rect(p, x0 + w - 14, barH, 14, 12)
+
   return { advance: LSB + w + RSB }
 }
 
-// ---------------------------------------------------------------------------
-// Digits (cap-height)
-// ---------------------------------------------------------------------------
+// ---- Digits ----
 
 const zero: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = CAP * 0.64
   const x0 = LSB
   const cx = x0 + w / 2
-  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, STEM * 0.85, THIN * 1.2)
+  stressedRing(p, cx, CAP / 2, w / 2, CAP / 2, THIN + 42)
   return { advance: LSB + w + RSB }
 }
+
 const one: Drawer = (p) => {
   const w = CAP * 0.50
   const x0 = LSB
   const stemCx = x0 + w - STEM * 0.6
   rect(p, stemCx - STEM / 2, 0, STEM, CAP)
-  legStroke(p, stemCx - STEM / 2, x0 + STEM * 0.2, CAP - STEM * 1.4, CAP, STEM * 0.8)
-  slabSerif(p, stemCx, STEM, 0, 'bottom')
+  legStroke(p, stemCx - STEM / 2, x0 + STEM * 0.2, CAP - STEM * 1.5, CAP, STEM * 0.8)
+  slabSerif(p, stemCx, STEM, 0, { side: 'bottom' })
   return { advance: LSB + w + RSB }
 }
+
 const two: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = CAP * 0.66
   const x0 = LSB
   const cx = x0 + w / 2
   const upperCY = CAP * 0.70
   const upperRX = w / 2
   const upperRY = CAP * 0.30
-  halfRing(p, cx, upperCY, upperRX, upperRY, STEM * 0.9, 'top')
-  rect(p, cx + upperRX - STEM, upperCY - STEM * 0.4, STEM, upperRY * 0.6)
-  legStroke(p, x0 + STEM * 0.4, cx + upperRX - STEM * 0.5, THIN * 1.3, upperCY, STEM * 0.9)
-  rect(p, x0, 0, w, THIN * 1.3)
+  const stroke = THIN + 40
+  halfRing(p, cx, upperCY, upperRX, upperRY, stroke, 'top')
+  rect(p, cx + upperRX - stroke - OV, upperCY - stroke * 0.4, stroke + OV, upperRY * 0.6)
+  legStroke(p, x0 + STEM * 0.4, cx + upperRX - stroke * 0.5, stroke, upperCY, stroke * 0.9)
+  rect(p, x0, 0, w, THIN + 36)
+  dropTerminal(p, cx - upperRX + stroke / 2, upperCY + 5, THIN + 22, THIN + 30)
   return { advance: LSB + w + RSB }
 }
+
 const three: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = CAP * 0.64
   const x0 = LSB
   const cx = x0 + w / 2
   const upperCY = CAP * 0.74
   const lowerCY = CAP * 0.26
   const rx = w / 2
   const ry = CAP * 0.26
-  halfRing(p, cx, upperCY, rx, ry, STEM * 0.9, 'right')
-  halfRing(p, cx, lowerCY, rx, ry, STEM * 0.9, 'right')
-  rect(p, cx - STEM * 0.4, CAP / 2 - STEM * 0.4, STEM * 1.2, STEM * 0.8)
+  const stroke = THIN + 40
+  halfRing(p, cx, upperCY, rx, ry, stroke, 'right')
+  halfRing(p, cx, lowerCY, rx, ry, stroke, 'right')
+  rect(p, cx - stroke * 0.4 - OV, CAP / 2 - stroke * 0.4, stroke * 1.4 + OV * 2, stroke * 0.85)
+  dropTerminal(p, x0 + stroke / 2, upperCY + 5, THIN + 22, THIN + 30)
+  dropTerminal(p, x0 + stroke / 2, lowerCY - 5, THIN + 22, THIN + 30)
   return { advance: LSB + w + RSB }
 }
+
 const four: Drawer = (p) => {
-  const w = CAP * 0.68
+  const w = CAP * 0.70
   const x0 = LSB
   rect(p, x0 + w - STEM * 1.2, 0, STEM, CAP)
   const barY = CAP * 0.30
-  const barH = STEM * 0.85
-  legStroke(p, x0, x0 + w - STEM * 1.2, barY, CAP, STEM * 0.85)
+  const barH = THIN + 38
+  legStroke(p, x0, x0 + w - STEM * 1.2, barY, CAP, THIN + 38)
   rect(p, x0, barY, w, barH)
-  slabSerif(p, x0 + w - STEM * 0.7, STEM, 0, 'bottom')
+  slabSerif(p, x0 + w - STEM * 0.7, STEM, 0, { side: 'bottom' })
   return { advance: LSB + w + RSB }
 }
+
 const five: Drawer = (p) => {
-  const w = CAP * 0.60
+  const w = CAP * 0.64
   const x0 = LSB
   const cx = x0 + w / 2
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  rect(p, x0, CAP * 0.5, STEM * 0.9, CAP / 2)
-  halfRing(p, cx, CAP * 0.28, w / 2, CAP * 0.28, STEM * 0.9, 'right')
-  rect(p, x0, CAP * 0.48, STEM * 1.4, STEM * 0.9)
+  const stroke = THIN + 40
+  rect(p, x0, CAP - stroke, w, stroke)
+  rect(p, x0, CAP * 0.5, STEM, CAP / 2)
+  halfRing(p, cx, CAP * 0.30, w / 2, CAP * 0.30, stroke, 'right')
+  rect(p, x0, CAP * 0.5, STEM * 1.5 + OV, STEM)
+  dropTerminal(p, x0 + stroke / 2, CAP * 0.30 - CAP * 0.30 + 5, THIN + 22, THIN + 30)
   return { advance: LSB + w + RSB }
 }
+
 const six: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = CAP * 0.66
   const x0 = LSB
   const cx = x0 + w / 2
+  const stroke = THIN + 40
   const lowerRY = CAP * 0.32
   const lowerCY = lowerRY
   const lowerRX = w / 2
   ellipse(p, cx, lowerCY, lowerRX, lowerRY)
-  ellipse(p, cx, lowerCY, Math.max(1, lowerRX - STEM * 0.9), Math.max(1, lowerRY - STEM * 0.85), true)
-  rect(p, x0, lowerCY, STEM * 0.9, CAP - lowerCY)
-  halfRing(p, x0 + STEM * 0.45 + (w - STEM) / 4, CAP - STEM * 0.8, (w - STEM) / 4, STEM * 0.8, STEM * 0.85, 'top')
+  ellipse(p, cx, lowerCY, lowerRX - stroke, lowerRY - stroke, true)
+  rect(p, x0, lowerCY - OV, STEM, CAP - lowerCY - stroke + OV)
+  halfRing(p, x0 + STEM + (w - STEM) / 4, CAP - stroke, (w - STEM) / 4, stroke * 0.9, stroke * 0.85, 'top')
+  dropTerminal(p, x0 + STEM + (w - STEM) / 2 - 5, CAP - stroke - stroke * 0.4, THIN + 22, THIN + 30)
   return { advance: LSB + w + RSB }
 }
+
 const seven: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = CAP * 0.66
   const x0 = LSB
-  rect(p, x0, CAP - THIN * 1.3, w, THIN * 1.3)
-  legStroke(p, x0 + STEM * 0.5, x0 + w - STEM * 0.4, 0, CAP - THIN * 1.3, STEM * 0.85)
+  const barH = THIN + 36
+  rect(p, x0, CAP - barH, w, barH)
+  legStroke(p, x0 + STEM * 0.6, x0 + w - STEM * 0.5, 0, CAP - barH, STEM)
+  rect(p, x0, CAP - barH - 12, 12, 12)
   return { advance: LSB + w + RSB }
 }
+
 const eight: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = CAP * 0.66
   const x0 = LSB
   const cx = x0 + w / 2
   const upperCY = CAP * 0.70
@@ -1312,126 +1657,162 @@ const eight: Drawer = (p) => {
   const upperRY = CAP * 0.28
   const lowerRX = w / 2
   const lowerRY = CAP * 0.30
+  const stroke = THIN + 40
   ellipse(p, cx, upperCY, upperRX, upperRY)
-  ellipse(p, cx, upperCY, Math.max(1, upperRX - STEM * 0.82), Math.max(1, upperRY - STEM * 0.82), true)
+  ellipse(p, cx, upperCY, upperRX - stroke * 0.85, upperRY - stroke * 0.85, true)
   ellipse(p, cx, lowerCY, lowerRX, lowerRY)
-  ellipse(p, cx, lowerCY, Math.max(1, lowerRX - STEM * 0.85), Math.max(1, lowerRY - STEM * 0.85), true)
+  ellipse(p, cx, lowerCY, lowerRX - stroke * 0.85, lowerRY - stroke * 0.85, true)
   return { advance: LSB + w + RSB }
 }
+
 const nine: Drawer = (p) => {
-  const w = CAP * 0.62
+  const w = CAP * 0.66
   const x0 = LSB
   const cx = x0 + w / 2
+  const stroke = THIN + 40
   const upperRY = CAP * 0.32
   const upperCY = CAP - upperRY
   const upperRX = w / 2
   ellipse(p, cx, upperCY, upperRX, upperRY)
-  ellipse(p, cx, upperCY, Math.max(1, upperRX - STEM * 0.9), Math.max(1, upperRY - STEM * 0.85), true)
-  rect(p, x0 + w - STEM * 0.9, STEM * 0.8, STEM * 0.9, upperCY - STEM * 0.6)
-  halfRing(p, x0 + STEM * 0.45 + (w - STEM) * 0.75 / 2, STEM * 0.8, (w - STEM) / 4, STEM * 0.8, STEM * 0.85, 'bottom')
+  ellipse(p, cx, upperCY, upperRX - stroke, upperRY - stroke, true)
+  rect(p, x0 + w - STEM, stroke, STEM, upperCY - stroke + OV)
+  halfRing(p, x0 + STEM + (w - STEM) * 0.75 / 2, stroke, (w - STEM) / 4, stroke * 0.9, stroke * 0.85, 'bottom')
+  dropTerminal(p, x0 + stroke * 0.5, stroke + stroke * 0.3, THIN + 22, THIN + 30)
   return { advance: LSB + w + RSB }
 }
 
-// ---------------------------------------------------------------------------
-// Punctuation
-// ---------------------------------------------------------------------------
+// ---- Punctuation ----
 
 const period: Drawer = (p) => {
-  const r = LC_STEM * 0.45
+  const r = STEM * 0.46
   const cx = LSB + r
   ellipse(p, cx, r, r, r)
   return { advance: LSB + r * 2 + RSB }
 }
+
 const comma: Drawer = (p) => {
-  const r = LC_STEM * 0.45
+  const r = STEM * 0.46
   const cx = LSB + r
   ellipse(p, cx, r, r, r)
-  legStroke(p, cx - r * 0.2, cx - r * 0.6, -LC_STEM * 1.2, 0, LC_STEM * 0.6)
+  legStroke(p, cx - r * 0.3, cx - r * 0.6, -STEM * 1.1, 0, STEM * 0.6)
   return { advance: LSB + r * 2 + RSB }
 }
+
 const colon: Drawer = (p) => {
-  const r = LC_STEM * 0.45
+  const r = STEM * 0.46
   const cx = LSB + r
   ellipse(p, cx, r, r, r)
-  ellipse(p, cx, XH - r, r, r)
+  ellipse(p, cx, XH * 0.75, r, r)
   return { advance: LSB + r * 2 + RSB }
 }
+
 const semicolon: Drawer = (p) => {
-  const r = LC_STEM * 0.45
+  const r = STEM * 0.46
   const cx = LSB + r
   ellipse(p, cx, r, r, r)
-  legStroke(p, cx - r * 0.2, cx - r * 0.6, -LC_STEM * 1.2, 0, LC_STEM * 0.6)
-  ellipse(p, cx, XH - r, r, r)
+  legStroke(p, cx - r * 0.3, cx - r * 0.6, -STEM * 1.1, 0, STEM * 0.6)
+  ellipse(p, cx, XH * 0.75, r, r)
   return { advance: LSB + r * 2 + RSB }
 }
+
 const exclam: Drawer = (p) => {
-  const r = LC_STEM * 0.45
+  const r = STEM * 0.46
   const cx = LSB + r
   ellipse(p, cx, r, r, r)
-  // Tapered stem (thicker at top)
-  p.moveTo(cx - LC_STEM * 0.45, CAP)
-  p.lineTo(cx + LC_STEM * 0.45, CAP)
-  p.lineTo(cx + LC_STEM * 0.25, r * 2 + 8)
-  p.lineTo(cx - LC_STEM * 0.25, r * 2 + 8)
-  p.close()
-  return { advance: LSB + LC_STEM + RSB }
+  // Taper toward the top for an old-style feel.
+  legStroke(p, cx, cx, CAP * 0.22, CAP, STEM * 0.9)
+  return { advance: LSB + STEM + RSB }
 }
+
 const question: Drawer = (p) => {
-  const w = CAP * 0.50
+  const w = CAP * 0.56
   const x0 = LSB
   const cx = x0 + w / 2
-  const upperCY = CAP * 0.78
+  const upperCY = CAP * 0.76
   const upperRX = w / 2
-  const upperRY = CAP * 0.22
-  halfRing(p, cx, upperCY, upperRX, upperRY, LC_STEM * 0.9, 'top')
-  rect(p, cx + upperRX - LC_STEM, upperCY - LC_STEM * 0.3, LC_STEM, upperRY * 0.7)
-  rect(p, cx + upperRX * 0.1 - LC_STEM * 0.4, CAP * 0.22, LC_STEM * 0.8, CAP * 0.30)
-  const r = LC_STEM * 0.45
+  const upperRY = CAP * 0.24
+  const stroke = THIN + 38
+  halfRing(p, cx, upperCY, upperRX, upperRY, stroke, 'top')
+  rect(p, cx + upperRX - stroke, upperCY - stroke * 0.3, stroke, upperRY * 0.5)
+  rect(p, cx - STEM / 2 + upperRX * 0.1, CAP * 0.22, STEM, CAP * 0.32)
+  const r = STEM * 0.46
   ellipse(p, cx + upperRX * 0.1, r, r, r)
   return { advance: LSB + w + RSB }
 }
+
 const hyphen: Drawer = (p) => {
-  const w = CAP * 0.36
-  rect(p, LSB, XH / 2 - LC_THIN * 0.5, w, LC_THIN)
+  const w = CAP * 0.42
+  rect(p, LSB, XH * 0.44 - (THIN + 20) / 2, w, THIN + 20)
   return { advance: LSB + w + RSB }
 }
+
 const apostrophe: Drawer = (p) => {
   const x0 = LSB
-  legStroke(p, x0 + LC_STEM * 0.4, x0, CAP * 0.68, CAP - LC_STEM * 0.15, LC_STEM * 0.6)
-  return { advance: LSB + LC_STEM + RSB }
+  legStroke(p, x0 + STEM * 0.4, x0, CAP * 0.6, CAP - STEM * 0.2, STEM * 0.6)
+  return { advance: LSB + STEM + RSB }
 }
+
 const quotedbl: Drawer = (p) => {
   const x0 = LSB
-  const gap = LC_STEM
-  legStroke(p, x0 + LC_STEM * 0.4, x0, CAP * 0.68, CAP - LC_STEM * 0.15, LC_STEM * 0.6)
-  legStroke(p, x0 + gap + LC_STEM * 0.4, x0 + gap, CAP * 0.68, CAP - LC_STEM * 0.15, LC_STEM * 0.6)
-  return { advance: LSB + gap + LC_STEM + RSB }
+  const gap = STEM * 1.0
+  legStroke(p, x0 + STEM * 0.4, x0, CAP * 0.6, CAP - STEM * 0.2, STEM * 0.6)
+  legStroke(p, x0 + gap + STEM * 0.4, x0 + gap, CAP * 0.6, CAP - STEM * 0.2, STEM * 0.6)
+  return { advance: LSB + gap + STEM + RSB }
 }
+
+const ampersand: Drawer = (p) => {
+  const w = CAP * 0.82
+  const x0 = LSB
+  const cx = x0 + w * 0.42
+  const stroke = THIN + 36
+  const upperCY = CAP * 0.74
+  const upperR = CAP * 0.22
+  ellipse(p, cx, upperCY, upperR, upperR)
+  ellipse(p, cx, upperCY, upperR - stroke, upperR - stroke, true)
+  const lowerCY = CAP * 0.28
+  const lowerRX = w * 0.46
+  const lowerRY = CAP * 0.28
+  const lowerCX = x0 + w * 0.46
+  halfRing(p, lowerCX, lowerCY, lowerRX, lowerRY, stroke, 'left')
+  rect(p, lowerCX, lowerCY + lowerRY - stroke, lowerRX * 0.45, stroke)
+  legStroke(p, lowerCX + lowerRX * 0.55, cx - upperR * 0.4, stroke, lowerCY + lowerRY * 0.4, stroke * 0.85)
+  return { advance: LSB + w + RSB }
+}
+
 const parenleft: Drawer = (p) => {
-  const w = CAP * 0.30
+  const w = CAP * 0.32
   const x0 = LSB
-  const cx = x0 + w + LC_STEM
-  halfRing(p, cx, CAP / 2, w + LC_STEM, CAP * 0.55, LC_STEM * 0.8, 'left')
+  const cx = x0 + w + STEM
+  halfRing(p, cx, CAP / 2, w + STEM, CAP * 0.55, STEM * 0.8, 'left')
   return { advance: LSB + w + RSB }
 }
+
 const parenright: Drawer = (p) => {
-  const w = CAP * 0.30
+  const w = CAP * 0.32
   const x0 = LSB
-  const cx = x0 - LC_STEM
-  halfRing(p, cx, CAP / 2, w + LC_STEM, CAP * 0.55, LC_STEM * 0.8, 'right')
+  const cx = x0 - STEM
+  halfRing(p, cx, CAP / 2, w + STEM, CAP * 0.55, STEM * 0.8, 'right')
   return { advance: LSB + w + RSB }
 }
+
 const slash: Drawer = (p) => {
-  const w = CAP * 0.42
+  const w = CAP * 0.44
   const x0 = LSB
-  legStroke(p, x0, x0 + w, -LC_STEM * 0.5, CAP, LC_STEM * 0.75)
+  legStroke(p, x0, x0 + w, -100, CAP, THIN + 32)
   return { advance: LSB + w + RSB }
 }
+
 const middot: Drawer = (p) => {
-  const r = LC_STEM * 0.42
+  const r = STEM * 0.42
   const cx = LSB + r
-  ellipse(p, cx, CAP * 0.4, r, r)
+  ellipse(p, cx, CAP * 0.45, r, r)
   return { advance: LSB + r * 2 + RSB }
+}
+
+const emdash: Drawer = (p) => {
+  const w = CAP * 1.00
+  rect(p, LSB, XH * 0.44 - (THIN + 20) / 2, w, THIN + 20)
+  return { advance: LSB + w + RSB }
 }
 
 // ---------------------------------------------------------------------------
@@ -1516,10 +1897,12 @@ const GLYPHS: GlyphSpec[] = [
   { name: 'hyphen', unicodes: [0x2D], draw: hyphen },
   { name: 'apostrophe', unicodes: [0x27], draw: apostrophe },
   { name: 'quotedbl', unicodes: [0x22], draw: quotedbl },
+  { name: 'ampersand', unicodes: [0x26], draw: ampersand },
   { name: 'parenleft', unicodes: [0x28], draw: parenleft },
   { name: 'parenright', unicodes: [0x29], draw: parenright },
   { name: 'slash', unicodes: [0x2F], draw: slash },
   { name: 'middot', unicodes: [0x00B7], draw: middot },
+  { name: 'emdash', unicodes: [0x2014], draw: emdash },
 ]
 
 async function build() {
@@ -1541,7 +1924,51 @@ async function build() {
 
   for (const spec of GLYPHS) {
     const path = new opentype.Path()
-    const { advance } = spec.draw(path)
+    let { advance } = spec.draw(path)
+    // Auto-pad: if any drawn path extends left of LSB, translate everything
+    // right so the glyph's xMin >= LSB — prevents the glyph from visually
+    // overlapping the previous character on the line.
+    const bb = path.getBoundingBox()
+    const leftOverflow = LSB - bb.x1
+    if (leftOverflow > 0.001) {
+      // Add a small safety pad so that cubic-curve bboxes computed by the
+      // parser (which consider off-curve control point extrema) never dip
+      // below LSB due to rounding. Round up to an integer.
+      const shift = Math.ceil(leftOverflow + 0.5)
+      for (const cmd of path.commands as Array<Record<string, number>>) {
+        if ('x' in cmd) cmd.x += shift
+        if ('x1' in cmd) cmd.x1 += shift
+        if ('x2' in cmd) cmd.x2 += shift
+      }
+      advance += shift
+    }
+    // Round all path coords to integers so that opentype.js' CFF delta
+    // encoder doesn't accumulate fractional rounding drift between
+    // subpaths. Rounding here is stable and keeps xMin integer-aligned.
+    for (const cmd of path.commands as Array<Record<string, number>>) {
+      if ('x' in cmd) cmd.x = Math.round(cmd.x)
+      if ('y' in cmd) cmd.y = Math.round(cmd.y)
+      if ('x1' in cmd) cmd.x1 = Math.round(cmd.x1)
+      if ('y1' in cmd) cmd.y1 = Math.round(cmd.y1)
+      if ('x2' in cmd) cmd.x2 = Math.round(cmd.x2)
+      if ('y2' in cmd) cmd.y2 = Math.round(cmd.y2)
+    }
+    // Re-check xMin after rounding — round up any sub-LSB points to LSB.
+    const bbFinal = path.getBoundingBox()
+    if (bbFinal.x1 < LSB) {
+      const finalShift = Math.ceil(LSB - bbFinal.x1)
+      for (const cmd of path.commands as Array<Record<string, number>>) {
+        if ('x' in cmd) cmd.x += finalShift
+        if ('x1' in cmd) cmd.x1 += finalShift
+        if ('x2' in cmd) cmd.x2 += finalShift
+      }
+      advance += finalShift
+    }
+    // Ensure advance at least clears the glyph's right edge + RSB.
+    const bb2 = path.getBoundingBox()
+    const minAdvance = bb2.x2 + RSB
+    if (advance < minAdvance) advance = minAdvance
+
     const g = new opentype.Glyph({
       name: spec.name,
       unicode: spec.unicodes[0]!,
@@ -1566,7 +1993,7 @@ async function build() {
     license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
     licenseURL: 'https://openfontlicense.org',
     version: '0.8.0',
-    description: 'Redwood Serif — old-style / transitional serif inspired by NPS Rawlinson OT and Plantin. John Muir field-journal warmth.',
+    description: 'Redwood Serif — warm bookish transitional serif inspired by Plantin and NPS Rawlinson. Park field-journal warmth, 1910s book-face bones.',
     copyright: 'Copyright (c) 2026, NPS Fonts contributors. With Reserved Font Name "Redwood Serif".',
     trademark: '',
     glyphs,
@@ -1591,8 +2018,8 @@ async function build() {
   const woff2Buf = Buffer.from(await wawoff2.compress(otfBuf))
   await writeFile(resolve(FONTS, 'woff2', 'RedwoodSerif-Regular.woff2'), woff2Buf)
 
-  console.log(`✓ Redwood Serif: ${GLYPHS.length} glyphs · ${(otfBuf.length / 1024).toFixed(1)}KB OTF`)
+  console.log(`\u2713 Redwood Serif: ${GLYPHS.length} glyphs \u00b7 ${(otfBuf.length / 1024).toFixed(1)}KB OTF`)
 }
 
 await build()
-export const REDWOOD_SERIF_GLYPHS = GLYPHS
+export const REDWOOD_GLYPHS = GLYPHS

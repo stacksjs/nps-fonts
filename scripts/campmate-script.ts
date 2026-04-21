@@ -1,12 +1,35 @@
 #!/usr/bin/env bun
 /**
- * Campmate Script — USFS "National Forest" brush-script.
+ * Campmate Script — USFS/NPS trailhead-sign brush-script.
  *
- * Simple rect+ellipse primitives, moderate 2:1 stroke contrast, 15° italic
- * shear applied post-draw. Wood-sign cursive feel with ligatures: oo, ll, tt,
- * ee, ss via OpenType `liga` GSUB.
+ * A hand-lettered connected cursive evocative of the wood/metal routed-sign
+ * lettering seen on USFS and NPS trailhead markers: upright with a slight
+ * ~15° italic slant, warm, outdoorsy, with real brush contrast — thick
+ * downstrokes vs. thin upstrokes at roughly 3:1.
  *
- * Coverage: A-Z, a-z, 0-9, basic punctuation + 5 ligatures. Single weight.
+ * Drawing strategy
+ * ----------------
+ * Each glyph is assembled from simple, non-self-intersecting primitives:
+ *   - rect   — thick vertical stems and slabs
+ *   - ellipse (with hole=true for counters) — bowls
+ *   - halfRing — soft curves (C, S, etc.)
+ *   - legStroke — diagonals (v, w, k, x, N, A…)
+ *
+ * The "brush contrast" look is produced by pairing a THICK rect (downstroke,
+ * width STEM_THICK ≈ 110) with THIN horizontal elements (upstrokes, joins,
+ * crossbars of width STEM_THIN ≈ 35). Bowls are drawn with brushBowl(),
+ * which fills a ring whose vertical sides are thick and whose top/bottom
+ * caps are thin — the signature pressure/release of a brush.
+ *
+ * After every glyph is drawn, a 15° italic shear is applied in-place. Then
+ * we measure the bounding box and, if the post-shear path extends left of
+ * LSB, we translate the whole path right (and pad the advance) so that
+ * xMin >= LSB for every glyph — no more "Campmat  e" spacing gaps.
+ *
+ * Ligatures (oo, ll, tt, ee, ss) are drawn as two separate letter shapes
+ * placed slightly closer together than the normal advance would allow —
+ * so they touch/overlap in ink rather than render as an "=" shape. They
+ * are registered via the OpenType `liga` GSUB.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -25,23 +48,25 @@ const FONTS_DIR = resolve(ROOT, 'fonts', 'campmate-script')
 
 const UPM = 1000
 const CAP = 680
-const XH = 360
-const ASC = 740
-const DESC = -200
-const STROKE = 95               // base brush weight reference
-const THICK = Math.round(STROKE * 1.15) // ~109 — heavy downstroke (brush press)
-const THIN = Math.round(STROKE * 0.40)  // ~38 — light upstroke (brush lift)
-const TAPER = Math.round(STROKE * 0.26) // ~25 — pen terminal tip
-// Contrast ratio = THICK/TAPER ≈ 4.4:1 at terminals, THICK/THIN ≈ 2.9:1 in strokes
-const LSB = 30
-const RSB = 30
+const XH = 420
+const ASC = 780
+const DESC = -240
+
+// Brush contrast: thick downstroke vs. thin upstroke.
+// Contrast ratio ≈ 110/35 ≈ 3.1:1 — squarely in USFS brush-script territory.
+const STEM_THICK = 110
+const STEM_THIN = 35
+const STEM_MED = 70      // middle weight (used for bowl horizontal caps)
+
+const LSB = 90
+const RSB = 30  // tight — script letters should connect/overlap, not space out
 const KAPPA = 0.5522847498307936
 
 // Italic shear
 const SLANT_DEG = 15
-const SHEAR = Math.tan(SLANT_DEG * Math.PI / 180)   // ≈ 0.268
+const SHEAR = Math.tan(SLANT_DEG * Math.PI / 180)   // ≈ 0.2679
 
-/** Apply italic shear to every command in a Path, in place. */
+/** Apply italic shear (x += SHEAR * y) to every command in a Path, in place. */
 function applyShear(p: opentype.Path) {
   for (const cmd of p.commands) {
     const c = cmd as { type: string, x?: number, y?: number, x1?: number, y1?: number, x2?: number, y2?: number }
@@ -51,8 +76,25 @@ function applyShear(p: opentype.Path) {
   }
 }
 
+/**
+ * Estimate the right edge of the glyph's "baseline band" — the x-max of
+ * commands whose y is within the x-height range. Ascender overhang (which
+ * sits above the next letter's blank LSB space) is ignored, so the glyph's
+ * advance can stay tight without making letters collide at the baseline.
+ */
+function estimateBaselineRightEdge(p: opentype.Path): number {
+  let maxX = 0
+  for (const cmd of p.commands) {
+    const c = cmd as { type: string, x?: number, y?: number }
+    if (c.x !== undefined && c.y !== undefined && c.y <= XH + 20 && c.y >= -80) {
+      if (c.x > maxX) maxX = c.x
+    }
+  }
+  return maxX
+}
+
 // ---------------------------------------------------------------------------
-// Primitives — copied from summitgrade-1935 verbatim, plus a thin wrapper.
+// Path primitives (verbatim from summitgrade-1935.ts, plus small helpers)
 // ---------------------------------------------------------------------------
 
 function rect(p: opentype.Path, x: number, y: number, w: number, h: number) {
@@ -154,6 +196,7 @@ function halfRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: numb
     }
   }
   else {
+    // bottom
     if (hollow) {
       p.moveTo(cx - rx, cy)
       p.curveTo(cx - rx, cy - ry * k, cx - rx * k, cy - ry, cx, cy - ry)
@@ -167,53 +210,59 @@ function halfRing(p: opentype.Path, cx: number, cy: number, rx: number, ry: numb
     else {
       p.moveTo(cx - rx, cy)
       p.curveTo(cx - rx, cy - ry * k, cx - rx * k, cy - ry, cx, cy - ry)
-      p.curveTo(cx + rx * k, cy - ry, cx + rx, cy - ry * k, cx - rx, cy)
+      p.curveTo(cx + rx * k, cy - ry, cx + rx, cy - ry * k, cx + rx, cy)
+      p.lineTo(cx - rx, cy)
       p.close()
     }
   }
 }
 
-/**
- * Simple straight-sided stem with rounded endcaps. Never tapers; never
- * produces self-intersecting polygons.
- */
-function stem(p: opentype.Path, cx: number, y0: number, y1: number, w = STROKE, caps: 'both' | 'top' | 'bot' | 'none' = 'both') {
-  rect(p, cx - w / 2, y0, w, y1 - y0)
-  if (caps === 'both' || caps === 'bot') ellipse(p, cx, y0, w / 2, w / 2)
-  if (caps === 'both' || caps === 'top') ellipse(p, cx, y1, w / 2, w / 2)
-}
-
-/** Horizontal stem (bar). */
-function hstem(p: opentype.Path, x0: number, x1: number, cy: number, w = STROKE, caps: 'both' | 'left' | 'right' | 'none' = 'both') {
-  rect(p, x0, cy - w / 2, x1 - x0, w)
-  if (caps === 'both' || caps === 'left') ellipse(p, x0, cy, w / 2, w / 2)
-  if (caps === 'both' || caps === 'right') ellipse(p, x1, cy, w / 2, w / 2)
-}
+// ---------------------------------------------------------------------------
+// Derived primitives (glyph-building blocks)
+// ---------------------------------------------------------------------------
 
 /**
- * Exit hairline on the right of lowercase letters — a small rising
- * stub at the baseline that connects the letter to the one following.
- * Starts at the baseline (y=0) so it stays hooked to the letter body
- * and rises to the x-height to form an entry for the next glyph.
+ * A "brush bowl": an oval ring whose vertical sides are thick (STEM_THICK)
+ * and whose top/bottom caps are thin (STEM_MED). This produces the
+ * pressure/release contrast of a brush pen going around a curve.
+ *
+ * Implementation: fill an outer ellipse, subtract an inner ellipse whose
+ * x-radius is shrunk by `thick` (thick sides) and whose y-radius is shrunk
+ * by `thin` (thin caps). Non-self-intersecting.
  */
-function exitTail(p: opentype.Path, xStem: number, yStem: number, dx = 85, dy = 50) {
-  const x0 = xStem
-  const y0 = Math.max(yStem, 0)
-  const x1 = x0 + dx
-  const y1 = y0 + dy
-  legStroke(p, x0, x1, y0, y1, THIN * 0.9)
-}
-
-/**
- * Oval bowl with inner counter — draws a filled ellipse minus a smaller
- * inner hole, giving a clean ring with uniform-ish stroke. Uses `ellipse`
- * primitive only.
- */
-function ovalBowl(p: opentype.Path, cx: number, cy: number, rx: number, ry: number, w = STROKE) {
+function brushBowl(p: opentype.Path, cx: number, cy: number, rx: number, ry: number, thick = STEM_THICK, thin = STEM_MED) {
   ellipse(p, cx, cy, rx, ry)
-  const irx = Math.max(1, rx - w)
-  const iry = Math.max(1, ry - w * 0.9)
+  const irx = Math.max(1, rx - thick)
+  const iry = Math.max(1, ry - thin)
   ellipse(p, cx, cy, irx, iry, true)
+}
+
+/** Thick vertical downstroke — a rect, centered on x=cx. */
+function thickStem(p: opentype.Path, cx: number, y0: number, y1: number, w = STEM_THICK) {
+  rect(p, cx - w / 2, y0, w, y1 - y0)
+}
+
+/** Thin horizontal or diagonal upstroke — just a rect (if horizontal) or legStroke (if diagonal). */
+function thinBar(p: opentype.Path, x0: number, x1: number, cy: number, w = STEM_THIN) {
+  rect(p, x0, cy - w / 2, x1 - x0, w)
+}
+
+/**
+ * A short thin upward-curving "entry" stroke at the bottom-left of a
+ * letter that sits to the right of another letter. Draws a legStroke
+ * from (x, 0) rising to (x+dx, dy).
+ */
+function entryTick(p: opentype.Path, x: number, dx = 60, dy = 110, w = STEM_THIN) {
+  legStroke(p, x, x + dx, 0, dy, w)
+}
+
+/**
+ * A short thin upward-rising "exit" tail at the bottom-right of a letter,
+ * going from (x, 0) up-right to (x+dx, dy). Forms the connecting hairline
+ * to the next glyph.
+ */
+function exitTick(p: opentype.Path, x: number, dx = 70, dy = 120, w = STEM_THIN) {
+  legStroke(p, x, x + dx, 0, dy, w)
 }
 
 // ---------------------------------------------------------------------------
@@ -223,730 +272,754 @@ function ovalBowl(p: opentype.Path, cx: number, cy: number, rx: number, ry: numb
 interface GlyphResult { advance: number }
 type Drawer = (p: opentype.Path) => GlyphResult
 
-const LC_W = 480          // default lowercase advance body width
-const WIDE = 620
-const NARROW = 340
-const CAP_LSB = 40
-const CAP_RSB = 40
+// Body widths — design targets, not hard limits. Actual advance is also
+// clamped in the build() loop against the post-shear bbox + RSB.
+const LC_W = 520
+const LC_NARROW = 360
+const LC_WIDE = 680
 const CAP_W = 720
+const CAP_NARROW = 460
+const CAP_WIDE = 900
 
 // ---------------------------------------------------------------------------
 // Lowercase
 // ---------------------------------------------------------------------------
 
-// a — oval bowl + right stem
+// a — round bowl, thick right stem, small exit tail at baseline
 const a: Drawer = (p) => {
   const w = LC_W
-  const bowlRX = (w - STROKE) / 2 - 20
-  const bowlCX = LSB + bowlRX + 10
-  const bowlCY = XH / 2
-  const bowlRY = XH / 2
-  ovalBowl(p, bowlCX, bowlCY, bowlRX, bowlRY, STROKE)
-  // right stem
-  const stemX = bowlCX + bowlRX - STROKE / 2
-  stem(p, stemX, 0, XH, STROKE)
-  // exit tail
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 70, 0)
+  const rx = (w - STEM_THICK) / 2 - 20
+  const ry = XH / 2
+  const cx = LSB + rx + 15
+  const cy = ry
+  brushBowl(p, cx, cy, rx, ry)
+  // thick right stem (kissed to bowl)
+  const stemX = cx + rx - STEM_THICK / 2
+  thickStem(p, stemX, 0, XH)
+  exitTick(p, stemX + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// b — ascender stem + bowl bottom-right
+// b — tall ascender stem on left + bowl attached to bottom half
 const b: Drawer = (p) => {
   const w = LC_W
-  const stemX = LSB + STROKE / 2
-  stem(p, stemX, 0, ASC - 30, STROKE)
-  const bowlRX = (w - STROKE) / 2 - 10
-  const bowlCX = stemX + bowlRX + STROKE / 2 - 5
-  const bowlCY = XH / 2
-  ovalBowl(p, bowlCX, bowlCY, bowlRX, XH / 2, STROKE)
-  exitTail(p, bowlCX + bowlRX - STROKE / 4, bowlCY - XH / 2 + STROKE * 0.3, 70, 0)
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, ASC - 40)
+  const rx = (w - STEM_THICK) / 2 - 10
+  const cx = stemX + rx + STEM_THICK / 2 - 10
+  const cy = XH / 2
+  brushBowl(p, cx, cy, rx, cy)
   return { advance: LSB + w + RSB }
 }
 
-// c — open left half ring
+// c — open left half-ring with thin top/bottom hooks
 const c: Drawer = (p) => {
   const w = LC_W - 40
-  const rx = (w - STROKE) / 2
-  const cx = LSB + rx + STROKE / 2
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
   const cy = XH / 2
-  halfRing(p, cx, cy, rx, XH / 2, STROKE, 'left')
-  // top arm stub
-  hstem(p, cx, cx + rx * 0.4, XH - STROKE / 2, STROKE, 'right')
-  // bottom arm stub
-  hstem(p, cx, cx + rx * 0.4, STROKE / 2, STROKE, 'right')
-  exitTail(p, cx + rx * 0.4 + STROKE / 2, STROKE * 0.4, 70, 0)
+  const ry = XH / 2
+  // back: thick left half
+  halfRing(p, cx, cy, rx, ry, STEM_THICK, 'left')
+  // thin top hook going right — START far enough left to overlap the ring wall
+  const innerLeftX = cx - rx + STEM_THICK - 10  // a bit past the inner right edge
+  thinBar(p, innerLeftX, cx + rx * 0.6, XH - STEM_MED / 2 - 6, STEM_MED * 0.8)
+  // thin bottom hook going right
+  thinBar(p, innerLeftX, cx + rx * 0.45, STEM_MED / 2 + 6, STEM_MED * 0.8)
+  exitTick(p, cx + rx * 0.5, 50, 80)
   return { advance: LSB + w + RSB }
 }
 
-// d — bowl + right ascender stem
+// d — bowl on left + tall ascender stem on right
 const d: Drawer = (p) => {
   const w = LC_W
-  const bowlRX = (w - STROKE) / 2 - 15
-  const bowlCX = LSB + bowlRX + STROKE / 2
-  const bowlCY = XH / 2
-  ovalBowl(p, bowlCX, bowlCY, bowlRX, XH / 2, STROKE)
-  const stemX = bowlCX + bowlRX - STROKE / 2
-  stem(p, stemX, 0, ASC - 30, STROKE)
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 70, 0)
+  const rx = (w - STEM_THICK) / 2 - 15
+  const cx = LSB + rx + STEM_THICK / 2
+  const cy = XH / 2
+  brushBowl(p, cx, cy, rx, cy)
+  const stemX = cx + rx - STEM_THICK / 2
+  thickStem(p, stemX, 0, ASC - 40)
+  exitTick(p, stemX + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// e — loop with horizontal bar across the middle
+// e — oval with a thin horizontal crossbar splitting the counter
 const e: Drawer = (p) => {
   const w = LC_W - 30
-  const rx = (w - STROKE) / 2
-  const cx = LSB + rx + STROKE / 2
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
   const cy = XH / 2
-  ovalBowl(p, cx, cy, rx, XH / 2, STROKE)
-  // crossbar inside
-  rect(p, cx - rx + STROKE * 0.4, cy - THIN / 2, rx * 2 - STROKE * 0.8, THIN)
-  exitTail(p, cx + rx - STROKE * 0.2, STROKE * 0.3, 70, 0)
+  brushBowl(p, cx, cy, rx, cy)
+  // crossbar inside counter (thin)
+  const barW = rx * 2 - STEM_THICK * 0.8
+  thinBar(p, cx - barW / 2, cx + barW / 2, cy, STEM_THIN)
+  exitTick(p, cx + rx - STEM_THICK * 0.2, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
-// f — tall stem with crossbar + descender
+// f — tall ascender+descender stem with thin crossbar at x-height
 const f: Drawer = (p) => {
-  const w = NARROW + 30
-  const stemX = LSB + STROKE / 2 + 20
-  stem(p, stemX, DESC + 20, ASC - 30, STROKE)
-  // crossbar near x-height
-  hstem(p, stemX - STROKE * 1.0, stemX + STROKE * 1.0, XH - STROKE / 2, THIN)
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = LC_NARROW + 40
+  const stemX = LSB + STEM_THICK / 2 + 30
+  thickStem(p, stemX, DESC + 30, ASC - 40)
+  // thin crossbar across x-height
+  thinBar(p, stemX - STEM_THICK * 0.9, stemX + STEM_THICK * 1.1, XH - STEM_THIN, STEM_THIN)
   return { advance: LSB + w + RSB }
 }
 
-// g — bowl + descender stem curving to the left
+// g — bowl at x-height + descender stem curving left into a hook
 const g: Drawer = (p) => {
   const w = LC_W
-  const bowlRX = (w - STROKE) / 2 - 10
-  const bowlCX = LSB + bowlRX + STROKE / 2
-  ovalBowl(p, bowlCX, XH / 2, bowlRX, XH / 2, STROKE)
-  const stemX = bowlCX + bowlRX - STROKE / 2
-  stem(p, stemX, DESC / 2, XH, STROKE)
+  const rx = (w - STEM_THICK) / 2 - 10
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, XH / 2, rx, XH / 2)
+  const stemX = cx + rx - STEM_THICK / 2
+  thickStem(p, stemX, DESC / 2 + 30, XH)
   // descender hook curving to the left
-  halfRing(p, stemX - 70, DESC / 2, 70, 60, STROKE, 'bottom')
+  halfRing(p, stemX - 65, DESC / 2 + 30, 65, 55, STEM_MED, 'bottom')
   return { advance: LSB + w + RSB }
 }
 
-// h — tall stem + arch
+// h — tall ascender stem + thin arch to right stem
 const h: Drawer = (p) => {
-  const w = LC_W + 20
-  const stemX = LSB + STROKE / 2
-  stem(p, stemX, 0, ASC - 30, STROKE)
-  // arch to right stem
-  const rightStemX = stemX + (w - STROKE) - 10
-  stem(p, rightStemX, 0, XH - STROKE / 2, STROKE)
-  // arch connector (ellipse-based)
-  const archCX = (stemX + rightStemX) / 2
-  const archRX = (rightStemX - stemX) / 2
-  halfRing(p, archCX, XH - STROKE / 2, archRX, STROKE * 1.2, STROKE, 'top')
-  exitTail(p, rightStemX + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = LC_W + 40
+  const leftX = LSB + STEM_THICK / 2
+  thickStem(p, leftX, 0, ASC - 40)
+  const rightX = LSB + w - STEM_THICK / 2 - 20
+  thickStem(p, rightX, 0, XH - STEM_THIN)
+  // thin arch connector between stem tops at x-height
+  const archCX = (leftX + rightX) / 2
+  const archRX = (rightX - leftX) / 2
+  halfRing(p, archCX, XH - STEM_THIN, archRX, STEM_MED, STEM_THIN, 'top')
+  exitTick(p, rightX + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// i — short stem + dot
+// i — short stem + dot above
 const i: Drawer = (p) => {
-  const w = NARROW - 40
-  const stemX = LSB + STROKE / 2 + 30
-  stem(p, stemX, 0, XH, STROKE)
-  // dot above
-  ellipse(p, stemX + 15, XH + 70, STROKE * 0.55, STROKE * 0.55)
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 65, 0)
+  const w = LC_NARROW - 60
+  const stemX = LSB + w / 2
+  thickStem(p, stemX, 0, XH)
+  // dot above x-height
+  ellipse(p, stemX + 12, XH + 90, STEM_THICK * 0.48, STEM_THICK * 0.48)
+  exitTick(p, stemX + STEM_THICK / 2, 55, 85)
   return { advance: LSB + w + RSB }
 }
 
-// j — stem with descender + dot above x-height
+// j — stem with descender hook + dot above
 const j_lc: Drawer = (p) => {
-  const w = NARROW - 30
-  const stemX = LSB + STROKE / 2 + 30
-  stem(p, stemX, DESC / 2, XH, STROKE)
-  // hook at bottom curving left
-  halfRing(p, stemX - 60, DESC / 2, 60, 50, STROKE, 'bottom')
-  // dot above
-  ellipse(p, stemX + 20, XH + 80, STROKE * 0.55, STROKE * 0.55)
+  const w = LC_NARROW - 40
+  const stemX = LSB + w / 2 + 10
+  thickStem(p, stemX, DESC / 2 + 30, XH)
+  halfRing(p, stemX - 55, DESC / 2 + 30, 55, 50, STEM_MED, 'bottom')
+  ellipse(p, stemX + 15, XH + 90, STEM_THICK * 0.48, STEM_THICK * 0.48)
   return { advance: LSB + w + RSB }
 }
 
-// k — ascender stem + diagonals
+// k — ascender stem + two thin diagonals
 const k: Drawer = (p) => {
   const w = LC_W
-  const stemX = LSB + STROKE / 2
-  stem(p, stemX, 0, ASC - 30, STROKE)
-  // upper diagonal: from mid-x-height on stem up-right
-  legStroke(p, stemX + STROKE / 2, LSB + w - 30, XH * 0.4, XH, THIN)
-  // lower diagonal
-  legStroke(p, stemX + STROKE / 2, LSB + w - 20, XH * 0.4, 0, STROKE * 0.85)
-  exitTail(p, LSB + w - 20, STROKE * 0.3, 60, 0)
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, ASC - 40)
+  // upper leg (thin)
+  legStroke(p, stemX + STEM_THICK / 2, LSB + w - 40, XH * 0.4, XH, STEM_THIN)
+  // lower leg (thick — main downstroke)
+  legStroke(p, stemX + STEM_THICK / 2, LSB + w - 20, XH * 0.4, 0, STEM_THICK * 0.85)
+  exitTick(p, LSB + w - 20, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
-// l — tall stem
+// l — single tall ascender stem
 const l: Drawer = (p) => {
-  const w = NARROW
-  const stemX = LSB + STROKE / 2 + 20
-  stem(p, stemX, 0, ASC - 30, STROKE)
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = LC_NARROW
+  const stemX = LSB + w / 2
+  thickStem(p, stemX, 0, ASC - 40)
+  exitTick(p, stemX + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// m — 3 stems with 2 arches
+// m — 3 thick stems joined by 2 thin arches
 const m: Drawer = (p) => {
-  const w = 720
-  const s1 = LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE) / 2
-  const s3 = s1 + (w - STROKE)
-  stem(p, s1, 0, XH, STROKE)
-  stem(p, s2, 0, XH - STROKE / 2, STROKE)
-  stem(p, s3, 0, XH - STROKE / 2, STROKE)
-  halfRing(p, (s1 + s2) / 2, XH - STROKE / 2, (s2 - s1) / 2, STROKE * 1.2, STROKE, 'top')
-  halfRing(p, (s2 + s3) / 2, XH - STROKE / 2, (s3 - s2) / 2, STROKE * 1.2, STROKE, 'top')
-  exitTail(p, s3 + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = 740
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK) / 2
+  const s3 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, 0, XH)
+  thickStem(p, s2, 0, XH - STEM_THIN)
+  thickStem(p, s3, 0, XH - STEM_THIN)
+  halfRing(p, (s1 + s2) / 2, XH - STEM_THIN, (s2 - s1) / 2, STEM_MED, STEM_THIN, 'top')
+  halfRing(p, (s2 + s3) / 2, XH - STEM_THIN, (s3 - s2) / 2, STEM_MED, STEM_THIN, 'top')
+  exitTick(p, s3 + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// n — 2 stems with arch
+// n — 2 thick stems joined by 1 thin arch
 const n: Drawer = (p) => {
-  const w = LC_W + 20
-  const s1 = LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  stem(p, s1, 0, XH, STROKE)
-  stem(p, s2, 0, XH - STROKE / 2, STROKE)
-  halfRing(p, (s1 + s2) / 2, XH - STROKE / 2, (s2 - s1) / 2, STROKE * 1.2, STROKE, 'top')
-  exitTail(p, s2 + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = LC_W + 40
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, 0, XH)
+  thickStem(p, s2, 0, XH - STEM_THIN)
+  halfRing(p, (s1 + s2) / 2, XH - STEM_THIN, (s2 - s1) / 2, STEM_MED, STEM_THIN, 'top')
+  exitTick(p, s2 + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// o — oval bowl
+// o — brush-bowl oval
 const o: Drawer = (p) => {
   const w = LC_W - 20
-  const rx = (w - STROKE) / 2
-  const cx = LSB + rx + STROKE / 2
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
   const cy = XH / 2
-  ovalBowl(p, cx, cy, rx, XH / 2, STROKE)
-  exitTail(p, cx + rx - STROKE * 0.1, cy - STROKE * 0.2, 65, 0)
+  brushBowl(p, cx, cy, rx, cy)
+  exitTick(p, cx + rx - STEM_THICK * 0.15, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
-// p — descender stem + bowl
+// p — descender stem + bowl on the right
 const p_lc: Drawer = (p) => {
   const w = LC_W
-  const stemX = LSB + STROKE / 2
-  stem(p, stemX, DESC + 40, XH, STROKE)
-  const bowlRX = (w - STROKE) / 2 - 15
-  const bowlCX = stemX + bowlRX + STROKE / 2 - 5
-  const bowlCY = XH / 2
-  ovalBowl(p, bowlCX, bowlCY, bowlRX, XH / 2, STROKE)
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, DESC + 40, XH)
+  const rx = (w - STEM_THICK) / 2 - 10
+  const cx = stemX + rx + STEM_THICK / 2 - 10
+  const cy = XH / 2
+  brushBowl(p, cx, cy, rx, cy)
   return { advance: LSB + w + RSB }
 }
 
 // q — bowl + right descender stem
 const q: Drawer = (p) => {
   const w = LC_W
-  const bowlRX = (w - STROKE) / 2 - 15
-  const bowlCX = LSB + bowlRX + STROKE / 2
-  const bowlCY = XH / 2
-  ovalBowl(p, bowlCX, bowlCY, bowlRX, XH / 2, STROKE)
-  const stemX = bowlCX + bowlRX - STROKE / 2
-  stem(p, stemX, DESC + 40, XH, STROKE)
+  const rx = (w - STEM_THICK) / 2 - 15
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, XH / 2, rx, XH / 2)
+  const stemX = cx + rx - STEM_THICK / 2
+  thickStem(p, stemX, DESC + 40, XH)
   return { advance: LSB + w + RSB }
 }
 
-// r — short stem + arm flick to upper right
+// r — short stem + thin arm flicking up-right with ball terminal
 const r: Drawer = (p) => {
-  const w = NARROW + 60
-  const stemX = LSB + STROKE / 2
-  stem(p, stemX, 0, XH, STROKE)
-  // arm: short diagonal from stem-top going up-right to a rounded tip
-  const armLen = w * 0.55
-  legStroke(p, stemX + STROKE / 2, stemX + armLen, XH - STROKE * 0.6, XH - STROKE * 0.1, STROKE * 0.85)
-  ellipse(p, stemX + armLen, XH - STROKE * 0.1, STROKE * 0.4, STROKE * 0.4)
+  const w = LC_NARROW + 90
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, XH)
+  const armLen = w * 0.5
+  legStroke(p, stemX + STEM_THICK / 2, stemX + armLen, XH - STEM_THIN, XH - 10, STEM_THIN)
+  ellipse(p, stemX + armLen, XH - 10, STEM_THICK * 0.38, STEM_THICK * 0.38)
   return { advance: LSB + w + RSB }
 }
 
-// s — S-curve built from top arc (right-opening), bottom arc (left-opening)
-// and a diagonal spine connecting them.
+// s — brush S: thick spine diagonal, thin top+bottom arcs
+// The spine must overlap the flat sides of each arc's end — we extend it
+// past each arc center in y so the parallelogram fully bridges them.
 const s: Drawer = (p) => {
-  const w = LC_W - 50
-  const x0 = LSB
-  const rx = (w - STROKE) / 2 - 10
-  const cx = x0 + rx + STROKE / 2 + 5
-  const ry = XH * 0.26
-  // Top bowl: half-ring opening DOWN-RIGHT: draw as left+top arc
-  halfRing(p, cx, XH - ry, rx, ry, STROKE, 'top')
-  // Bottom bowl: half-ring opening UP-LEFT: draw as right+bottom
-  halfRing(p, cx, ry, rx, ry, STROKE, 'bottom')
-  // Diagonal spine linking the inner ends
-  legStroke(p, cx + rx * 0.6, cx - rx * 0.6, ry, XH - ry, STROKE)
+  const w = LC_W - 60
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  const ry = XH * 0.25
+  halfRing(p, cx, XH - ry, rx, ry, STEM_MED, 'top')
+  halfRing(p, cx, ry, rx, ry, STEM_MED, 'bottom')
+  // Thick diagonal: go from inside the bottom arc's right wall to inside the
+  // top arc's left wall. Extend a bit past ry/XH-ry so the spine fully
+  // overlaps the arc strokes for a clean join.
+  legStroke(
+    p,
+    cx + rx - STEM_MED,       // bottom x — hugs inner-right of bottom arc
+    cx - rx + STEM_MED,       // top x — hugs inner-left of top arc
+    ry - STEM_MED * 0.3,      // start slightly inside the bottom arc
+    XH - ry + STEM_MED * 0.3, // end slightly inside the top arc
+    STEM_THICK * 0.95,
+  )
   return { advance: LSB + w + RSB }
 }
 
-// t — stem + crossbar (mildly ascender)
+// t — stem with crossbar, slightly above x-height
 const t: Drawer = (p) => {
-  const w = NARROW + 30
-  const stemX = LSB + STROKE / 2 + 20
-  stem(p, stemX, 0, XH + 120, STROKE)
-  hstem(p, stemX - STROKE * 1.0, stemX + STROKE * 1.0, XH - STROKE / 2, THIN)
-  exitTail(p, stemX + STROKE / 2, STROKE * 0.3, 65, 0)
+  const w = LC_NARROW + 40
+  const stemX = LSB + STEM_THICK / 2 + 20
+  thickStem(p, stemX, 0, XH + 140)
+  thinBar(p, stemX - STEM_THICK * 0.9, stemX + STEM_THICK * 1.1, XH - STEM_THIN, STEM_THIN)
+  exitTick(p, stemX + STEM_THICK / 2, 55, 85)
   return { advance: LSB + w + RSB }
 }
 
-// u — 2 stems with bottom loop
+// u — 2 thick stems with a thin bottom loop
 const u: Drawer = (p) => {
-  const w = LC_W + 20
-  const s1 = LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  stem(p, s1, STROKE / 2, XH, STROKE)
-  stem(p, s2, 0, XH, STROKE)
-  halfRing(p, (s1 + s2) / 2, STROKE / 2, (s2 - s1) / 2, STROKE * 1.2, STROKE, 'bottom')
-  exitTail(p, s2 + STROKE / 2, STROKE * 0.3, 70, 0)
+  const w = LC_W + 40
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, STEM_THIN, XH)
+  thickStem(p, s2, 0, XH)
+  halfRing(p, (s1 + s2) / 2, STEM_THIN, (s2 - s1) / 2, STEM_MED, STEM_THIN, 'bottom')
+  exitTick(p, s2 + STEM_THICK / 2, 60, 90)
   return { advance: LSB + w + RSB }
 }
 
-// v — two diagonals
+// v — thick left leg + thin right leg
 const v: Drawer = (p) => {
   const w = LC_W
   const x0 = LSB
   const cx = x0 + w / 2
-  legStroke(p, cx, x0 + STROKE / 2, 0, XH, STROKE)
-  legStroke(p, cx, x0 + w - STROKE / 2, 0, XH, THIN * 0.9)
-  exitTail(p, x0 + w - STROKE / 2, STROKE * 0.3, 65, 0)
+  legStroke(p, cx, x0 + STEM_THICK / 2, 0, XH, STEM_THICK * 0.95)
+  legStroke(p, cx, x0 + w - STEM_THIN, 0, XH, STEM_THIN)
+  exitTick(p, x0 + w - STEM_THIN, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
 // w — two v's joined
 const w_lc: Drawer = (p) => {
-  const w = 720
+  const w = 760
   const x0 = LSB
   const q1 = x0 + w * 0.25
   const q2 = x0 + w * 0.5
   const q3 = x0 + w * 0.75
-  legStroke(p, q1, x0 + STROKE / 2, 0, XH, STROKE)
-  legStroke(p, q1, q2, 0, XH, THIN * 0.9)
-  legStroke(p, q3, q2, 0, XH, STROKE)
-  legStroke(p, q3, x0 + w - STROKE / 2, 0, XH, THIN * 0.9)
-  exitTail(p, x0 + w - STROKE / 2, STROKE * 0.3, 65, 0)
+  legStroke(p, q1, x0 + STEM_THICK / 2, 0, XH, STEM_THICK * 0.95)
+  legStroke(p, q1, q2, 0, XH, STEM_THIN)
+  legStroke(p, q3, q2, 0, XH, STEM_THICK * 0.95)
+  legStroke(p, q3, x0 + w - STEM_THIN, 0, XH, STEM_THIN)
+  exitTick(p, x0 + w - STEM_THIN, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
-// x — crossed diagonals
+// x — thick down-right + thin down-left diagonal
 const x_lc: Drawer = (p) => {
   const w = LC_W
   const x0 = LSB
-  legStroke(p, x0 + STROKE / 2, x0 + w - STROKE / 2, 0, XH, STROKE)
-  legStroke(p, x0 + w - STROKE / 2, x0 + STROKE / 2, 0, XH, THIN)
-  exitTail(p, x0 + w - STROKE / 2, STROKE * 0.3, 60, 0)
+  legStroke(p, x0 + STEM_THICK / 2, x0 + w - STEM_THICK / 2, 0, XH, STEM_THICK * 0.9)
+  legStroke(p, x0 + w - STEM_THIN, x0 + STEM_THIN, 0, XH, STEM_THIN)
+  exitTick(p, x0 + w - STEM_THICK / 2, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
-// y — left stem + right stem with descender
+// y — thick diagonal in + thick descender diagonal out
 const y: Drawer = (p) => {
   const w = LC_W + 20
-  const s1 = LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  legStroke(p, (s1 + s2) / 2 - 20, s1, 0, XH, STROKE)
-  legStroke(p, s2 - 30, s2, DESC + 40, XH, STROKE)
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  legStroke(p, (s1 + s2) / 2, s1, 0, XH, STEM_THICK * 0.95)
+  legStroke(p, s2 - 30, s2, DESC + 40, XH, STEM_THICK * 0.95)
   return { advance: LSB + w + RSB }
 }
 
-// z — Z shape
+// z — thin top + thin bottom bars + thick diagonal spine
 const z: Drawer = (p) => {
-  const w = LC_W
+  const w = LC_W - 40
   const x0 = LSB
-  hstem(p, x0, x0 + w, XH - STROKE / 2, STROKE)
-  hstem(p, x0, x0 + w, STROKE / 2, STROKE)
-  legStroke(p, x0 + STROKE, x0 + w - STROKE, STROKE, XH - STROKE, STROKE * 0.95)
-  exitTail(p, x0 + w - STROKE / 2, STROKE * 0.3, 60, 0)
+  const barH = STEM_MED * 0.75
+  // Thin top bar
+  thinBar(p, x0, x0 + w, XH - barH / 2, barH)
+  // Thin bottom bar
+  thinBar(p, x0, x0 + w, barH / 2, barH)
+  // Thick diagonal spine — starts INSIDE the bottom bar, ends INSIDE the top bar
+  legStroke(
+    p,
+    x0 + w - STEM_THICK * 0.4,
+    x0 + STEM_THICK * 0.4,
+    barH * 0.3,
+    XH - barH * 0.3,
+    STEM_THICK * 0.9,
+  )
+  exitTick(p, x0 + w - STEM_THICK / 2, 55, 80)
   return { advance: LSB + w + RSB }
 }
 
 // ---------------------------------------------------------------------------
-// Uppercase — slightly flourished brush-script caps. Keep simple: an oval
-// bowl or stem + stroke, no complex swashes. Height = CAP.
+// Uppercase — slightly flourished brush caps. Height = CAP. Also brush-contrast.
 // ---------------------------------------------------------------------------
 
-// A — two diagonals meeting at apex + crossbar
+// A — thick left diagonal, thin right diagonal, thin crossbar
 const Acap: Drawer = (p) => {
   const w = CAP_W
-  const x0 = CAP_LSB
+  const x0 = LSB
   const cx = x0 + w / 2
-  legStroke(p, x0 + STROKE / 2, cx, 0, CAP, STROKE)
-  legStroke(p, x0 + w - STROKE / 2, cx, 0, CAP, THIN)
-  hstem(p, x0 + w * 0.22, x0 + w * 0.78, CAP * 0.32, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  legStroke(p, cx, x0 + STEM_THICK / 2, 0, CAP, STEM_THICK)
+  legStroke(p, cx, x0 + w - STEM_THIN, 0, CAP, STEM_THIN)
+  thinBar(p, x0 + w * 0.22, x0 + w * 0.78, CAP * 0.32, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// B — vertical stem with two bowls
+// B — thick stem + two bowls
 const Bcap: Drawer = (p) => {
   const w = CAP_W * 0.78
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
   // upper bowl
-  const ub_rx = (w - STROKE) / 2
-  const ub_cx = stemX + ub_rx
-  ovalBowl(p, ub_cx, CAP * 0.74, ub_rx, CAP * 0.26, STROKE)
-  // lower bowl
-  const lb_rx = (w - STROKE) / 2 + 20
-  const lb_cx = stemX + lb_rx
-  ovalBowl(p, lb_cx, CAP * 0.26, lb_rx, CAP * 0.26, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const ubRx = (w - STEM_THICK) / 2
+  const ubCx = stemX + ubRx
+  brushBowl(p, ubCx, CAP * 0.74, ubRx, CAP * 0.26)
+  // lower bowl (slightly larger)
+  const lbRx = (w - STEM_THICK) / 2 + 20
+  const lbCx = stemX + lbRx
+  brushBowl(p, lbCx, CAP * 0.26, lbRx, CAP * 0.26)
+  return { advance: LSB + w + RSB }
 }
 
-// C — open left half-ring, cap-height
+// C — thick left half-ring with thin top/bottom hooks
 const Ccap: Drawer = (p) => {
   const w = CAP_W
-  const rx = (w - STROKE) / 2
-  const cx = CAP_LSB + rx + STROKE / 2
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
   const cy = CAP / 2
-  halfRing(p, cx, cy, rx, CAP / 2, STROKE, 'left')
-  // top and bottom arms
-  hstem(p, cx, cx + rx * 0.4, CAP - STROKE / 2, STROKE, 'right')
-  hstem(p, cx, cx + rx * 0.4, STROKE / 2, STROKE, 'right')
-  return { advance: CAP_LSB + w + CAP_RSB }
+  halfRing(p, cx, cy, rx, CAP / 2, STEM_THICK, 'left')
+  // hooks must start INSIDE the ring wall to connect. Inner right edge is at
+  // x = cx - rx + STEM_THICK; bar slightly overlaps that.
+  const innerLeftX = cx - rx + STEM_THICK - 10
+  thinBar(p, innerLeftX, cx + rx * 0.55, CAP - STEM_MED / 2 - 6, STEM_MED * 0.85)
+  thinBar(p, innerLeftX, cx + rx * 0.45, STEM_MED / 2 + 6, STEM_MED * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
-// D — stem + bowl
+// D — thick stem + thick bowl
 const Dcap: Drawer = (p) => {
   const w = CAP_W
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  const bowlRX = (w - STROKE) / 2
-  const bowlCX = stemX + bowlRX
-  ovalBowl(p, bowlCX, CAP / 2, bowlRX, CAP / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  const rx = (w - STEM_THICK) / 2
+  const cx = stemX + rx
+  brushBowl(p, cx, CAP / 2, rx, CAP / 2)
+  return { advance: LSB + w + RSB }
 }
 
-// E
+// E — thick stem + top/bottom thin arms + thin middle arm
 const Ecap: Drawer = (p) => {
-  const w = CAP_W * 0.72
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  hstem(p, stemX, CAP_LSB + w, CAP - STROKE / 2, STROKE)
-  hstem(p, stemX, CAP_LSB + w, STROKE / 2, STROKE)
-  hstem(p, stemX, CAP_LSB + w * 0.78, CAP / 2, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.74
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  thinBar(p, stemX, LSB + w, CAP - STEM_MED / 2 - 4, STEM_MED)
+  thinBar(p, stemX, LSB + w, STEM_MED / 2 + 4, STEM_MED)
+  thinBar(p, stemX, LSB + w * 0.82, CAP / 2, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// F
+// F — E minus bottom arm
 const Fcap: Drawer = (p) => {
-  const w = CAP_W * 0.70
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  hstem(p, stemX, CAP_LSB + w, CAP - STROKE / 2, STROKE)
-  hstem(p, stemX, CAP_LSB + w * 0.78, CAP / 2, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.72
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  thinBar(p, stemX, LSB + w, CAP - STEM_MED / 2 - 4, STEM_MED)
+  thinBar(p, stemX, LSB + w * 0.82, CAP / 2, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// G
+// G — left half-ring + top/bottom thin hooks + inward thick spur
 const Gcap: Drawer = (p) => {
   const w = CAP_W
-  const rx = (w - STROKE) / 2
-  const cx = CAP_LSB + rx + STROKE / 2
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
   const cy = CAP / 2
-  halfRing(p, cx, cy, rx, CAP / 2, STROKE, 'left')
-  hstem(p, cx, cx + rx * 0.4, CAP - STROKE / 2, STROKE, 'right')
-  hstem(p, cx, cx + rx * 0.4, STROKE / 2, STROKE, 'right')
-  // inward spur
-  stem(p, cx + rx * 0.4, CAP * 0.3, CAP * 0.55, STROKE)
-  hstem(p, cx + rx * 0.15, cx + rx * 0.5, CAP * 0.42, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  halfRing(p, cx, cy, rx, CAP / 2, STEM_THICK, 'left')
+  const innerLeftX = cx - rx + STEM_THICK - 10
+  thinBar(p, innerLeftX, cx + rx * 0.55, CAP - STEM_MED / 2 - 6, STEM_MED * 0.85)
+  thinBar(p, innerLeftX, cx + rx * 0.45, STEM_MED / 2 + 6, STEM_MED * 0.85)
+  // thick inward spur from right (starts at bar, ends mid-height)
+  thickStem(p, cx + rx * 0.55 - STEM_THICK / 2, CAP * 0.3, CAP * 0.52)
+  thinBar(p, cx + rx * 0.25, cx + rx * 0.55, CAP * 0.44, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// H
+// H — two thick stems + thin crossbar
 const Hcap: Drawer = (p) => {
-  const w = CAP_W * 0.85
-  const s1 = CAP_LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  stem(p, s1, 0, CAP, STROKE)
-  stem(p, s2, 0, CAP, STROKE)
-  hstem(p, s1, s2, CAP / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.88
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, 0, CAP)
+  thickStem(p, s2, 0, CAP)
+  thinBar(p, s1, s2, CAP / 2, STEM_MED * 0.9)
+  return { advance: LSB + w + RSB }
 }
 
-// I
+// I — a single thick stem
 const Icap: Drawer = (p) => {
-  const w = NARROW - 40
-  const stemX = CAP_LSB + w / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_NARROW * 0.7
+  const stemX = LSB + w / 2
+  thickStem(p, stemX, 0, CAP)
+  return { advance: LSB + w + RSB }
 }
 
-// J
+// J — descender stem with hook
 const Jcap: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const stemX = CAP_LSB + STROKE / 2 + w * 0.3
-  stem(p, stemX, STROKE * 0.5, CAP, STROKE)
-  halfRing(p, stemX - (w * 0.3), STROKE * 0.5, w * 0.3, STROKE * 1.1, STROKE, 'bottom')
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.6
+  const stemX = LSB + w * 0.62
+  thickStem(p, stemX, STEM_THIN * 1.5, CAP)
+  halfRing(p, stemX - w * 0.32, STEM_THIN * 1.5, w * 0.32, STEM_MED * 1.2, STEM_MED, 'bottom')
+  return { advance: LSB + w + RSB }
 }
 
-// K
+// K — thick stem + upper thin leg + lower thick leg
 const Kcap: Drawer = (p) => {
   const w = CAP_W * 0.85
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  legStroke(p, stemX + STROKE / 2, CAP_LSB + w - 10, CAP / 2, CAP, THIN)
-  legStroke(p, stemX + STROKE / 2, CAP_LSB + w, CAP / 2, 0, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  legStroke(p, stemX + STEM_THICK / 2, LSB + w - 10, CAP * 0.48, CAP, STEM_THIN)
+  legStroke(p, stemX + STEM_THICK / 2, LSB + w, CAP * 0.48, 0, STEM_THICK * 0.9)
+  return { advance: LSB + w + RSB }
 }
 
-// L
+// L — thick stem + thin bottom arm
 const Lcap: Drawer = (p) => {
-  const w = CAP_W * 0.68
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  hstem(p, stemX, CAP_LSB + w, STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.7
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  thinBar(p, stemX, LSB + w, STEM_MED / 2 + 4, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
-// M
+// M — two thick stems + two thin diagonals meeting at a low V
 const Mcap: Drawer = (p) => {
-  const w = CAP_W * 1.05
-  const s1 = CAP_LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
+  const w = CAP_W * 1.1
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
   const mid = (s1 + s2) / 2
-  stem(p, s1, 0, CAP, STROKE)
-  stem(p, s2, 0, CAP, STROKE)
-  legStroke(p, s1, mid, CAP, CAP * 0.25, THIN)
-  legStroke(p, s2, mid, CAP, CAP * 0.25, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  thickStem(p, s1, 0, CAP)
+  thickStem(p, s2, 0, CAP)
+  legStroke(p, s1, mid, CAP, CAP * 0.28, STEM_THIN)
+  legStroke(p, s2, mid, CAP, CAP * 0.28, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// N
+// N — two thick stems + thick diagonal top-left -> bottom-right
 const Ncap: Drawer = (p) => {
-  const w = CAP_W * 0.9
-  const s1 = CAP_LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  stem(p, s1, 0, CAP, STROKE)
-  stem(p, s2, 0, CAP, STROKE)
-  legStroke(p, s1, s2, CAP, 0, STROKE * 0.85)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.92
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, 0, CAP)
+  thickStem(p, s2, 0, CAP)
+  legStroke(p, s1, s2, CAP, 0, STEM_THICK * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
-// O
+// O — brush bowl
 const Ocap: Drawer = (p) => {
   const w = CAP_W
-  const rx = (w - STROKE) / 2
-  const cx = CAP_LSB + rx + STROKE / 2
-  ovalBowl(p, cx, CAP / 2, rx, CAP / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP / 2, rx, CAP / 2)
+  return { advance: LSB + w + RSB }
 }
 
-// P
+// P — thick stem + upper bowl
 const Pcap: Drawer = (p) => {
   const w = CAP_W * 0.78
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  const bowlRX = (w - STROKE) / 2
-  ovalBowl(p, stemX + bowlRX, CAP * 0.72, bowlRX, CAP * 0.28, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  const rx = (w - STEM_THICK) / 2
+  brushBowl(p, stemX + rx, CAP * 0.72, rx, CAP * 0.28)
+  return { advance: LSB + w + RSB }
 }
 
-// Q
+// Q — brush bowl with a thick tail slash
 const Qcap: Drawer = (p) => {
   const w = CAP_W
-  const rx = (w - STROKE) / 2
-  const cx = CAP_LSB + rx + STROKE / 2
-  ovalBowl(p, cx, CAP / 2, rx, CAP / 2, STROKE)
-  // tail
-  legStroke(p, cx + rx * 0.3, cx + rx + STROKE, CAP * 0.2, -STROKE, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP / 2, rx, CAP / 2)
+  legStroke(p, cx + rx * 0.3, cx + rx + STEM_THICK * 0.8, CAP * 0.22, -STEM_THICK * 0.8, STEM_THICK * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
-// R
+// R — stem + upper bowl + thick leg
 const Rcap: Drawer = (p) => {
-  const w = CAP_W * 0.85
-  const stemX = CAP_LSB + STROKE / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  const bowlRX = (w - STROKE) / 2 - 30
-  ovalBowl(p, stemX + bowlRX, CAP * 0.72, bowlRX, CAP * 0.28, STROKE)
-  legStroke(p, stemX + bowlRX, CAP_LSB + w, CAP * 0.44, 0, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.88
+  const stemX = LSB + STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  const rx = (w - STEM_THICK) / 2 - 30
+  brushBowl(p, stemX + rx, CAP * 0.72, rx, CAP * 0.28)
+  legStroke(p, stemX + rx, LSB + w, CAP * 0.44, 0, STEM_THICK * 0.9)
+  return { advance: LSB + w + RSB }
 }
 
-// S
+// S — matches the LC s but at CAP height
 const Scap: Drawer = (p) => {
-  const w = CAP_W * 0.7
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2 - 10
-  const cx = x0 + rx + STROKE / 2 + 5
-  const ry = CAP * 0.26
-  halfRing(p, cx, CAP - ry, rx, ry, STROKE, 'top')
-  halfRing(p, cx, ry, rx, ry, STROKE, 'bottom')
-  legStroke(p, cx + rx * 0.5, cx - rx * 0.5, ry, CAP - ry, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.72
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  const ry = CAP * 0.25
+  halfRing(p, cx, CAP - ry, rx, ry, STEM_MED, 'top')
+  halfRing(p, cx, ry, rx, ry, STEM_MED, 'bottom')
+  legStroke(
+    p,
+    cx + rx - STEM_MED,
+    cx - rx + STEM_MED,
+    ry - STEM_MED * 0.3,
+    CAP - ry + STEM_MED * 0.3,
+    STEM_THICK * 0.95,
+  )
+  return { advance: LSB + w + RSB }
 }
 
-// T
+// T — thick stem + thin top bar
 const Tcap: Drawer = (p) => {
-  const w = CAP_W * 0.85
-  const cx = CAP_LSB + w / 2
-  stem(p, cx, 0, CAP, STROKE)
-  hstem(p, CAP_LSB, CAP_LSB + w, CAP - STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.88
+  const cx = LSB + w / 2
+  thickStem(p, cx, 0, CAP)
+  thinBar(p, LSB, LSB + w, CAP - STEM_MED / 2 - 4, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
-// U
+// U — two thick stems + thin bottom curve
 const Ucap: Drawer = (p) => {
-  const w = CAP_W * 0.9
-  const s1 = CAP_LSB + STROKE / 2
-  const s2 = s1 + (w - STROKE)
-  stem(p, s1, CAP * 0.3, CAP, STROKE)
-  stem(p, s2, 0, CAP, STROKE)
-  halfRing(p, (s1 + s2) / 2, CAP * 0.3, (s2 - s1) / 2, CAP * 0.3, STROKE, 'bottom')
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.92
+  const s1 = LSB + STEM_THICK / 2
+  const s2 = s1 + (w - STEM_THICK)
+  thickStem(p, s1, CAP * 0.3, CAP)
+  thickStem(p, s2, 0, CAP)
+  halfRing(p, (s1 + s2) / 2, CAP * 0.3, (s2 - s1) / 2, CAP * 0.3, STEM_THICK, 'bottom')
+  return { advance: LSB + w + RSB }
 }
 
-// V
+// V — thick left + thin right
 const Vcap: Drawer = (p) => {
   const w = CAP_W
-  const x0 = CAP_LSB
+  const x0 = LSB
   const cx = x0 + w / 2
-  legStroke(p, cx, x0 + STROKE / 2, 0, CAP, STROKE)
-  legStroke(p, cx, x0 + w - STROKE / 2, 0, CAP, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  legStroke(p, cx, x0 + STEM_THICK / 2, 0, CAP, STEM_THICK)
+  legStroke(p, cx, x0 + w - STEM_THIN, 0, CAP, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// W
+// W — two V's side-by-side
 const Wcap: Drawer = (p) => {
-  const w = CAP_W * 1.35
-  const x0 = CAP_LSB
+  const w = CAP_WIDE + 40
+  const x0 = LSB
   const q1 = x0 + w * 0.25
   const q2 = x0 + w * 0.5
   const q3 = x0 + w * 0.75
-  legStroke(p, q1, x0 + STROKE / 2, 0, CAP, STROKE)
-  legStroke(p, q1, q2, 0, CAP, THIN)
-  legStroke(p, q3, q2, 0, CAP, STROKE)
-  legStroke(p, q3, x0 + w - STROKE / 2, 0, CAP, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  legStroke(p, q1, x0 + STEM_THICK / 2, 0, CAP, STEM_THICK)
+  legStroke(p, q1, q2, 0, CAP, STEM_THIN)
+  legStroke(p, q3, q2, 0, CAP, STEM_THICK)
+  legStroke(p, q3, x0 + w - STEM_THIN, 0, CAP, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// X
+// X — thick down-right + thin down-left diagonal
 const Xcap: Drawer = (p) => {
-  const w = CAP_W * 0.85
-  const x0 = CAP_LSB
-  legStroke(p, x0 + STROKE / 2, x0 + w - STROKE / 2, 0, CAP, STROKE)
-  legStroke(p, x0 + w - STROKE / 2, x0 + STROKE / 2, 0, CAP, THIN)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.88
+  const x0 = LSB
+  legStroke(p, x0 + STEM_THICK / 2, x0 + w - STEM_THICK / 2, 0, CAP, STEM_THICK)
+  legStroke(p, x0 + w - STEM_THIN, x0 + STEM_THIN, 0, CAP, STEM_THIN)
+  return { advance: LSB + w + RSB }
 }
 
-// Y
+// Y — thick left diagonal + thin right diagonal + thick stem
 const Ycap: Drawer = (p) => {
   const w = CAP_W * 0.9
-  const x0 = CAP_LSB
+  const x0 = LSB
   const cx = x0 + w / 2
-  legStroke(p, cx, x0 + STROKE / 2, CAP / 2, CAP, STROKE)
-  legStroke(p, cx, x0 + w - STROKE / 2, CAP / 2, CAP, THIN)
-  stem(p, cx, 0, CAP / 2 + STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  legStroke(p, cx, x0 + STEM_THICK / 2, CAP / 2, CAP, STEM_THICK)
+  legStroke(p, cx, x0 + w - STEM_THIN, CAP / 2, CAP, STEM_THIN)
+  thickStem(p, cx, 0, CAP / 2 + STEM_THICK / 2)
+  return { advance: LSB + w + RSB }
 }
 
-// Z
+// Z — thin top + thin bottom bars + thick diagonal spine
 const Zcap: Drawer = (p) => {
   const w = CAP_W * 0.85
-  const x0 = CAP_LSB
-  hstem(p, x0, x0 + w, CAP - STROKE / 2, STROKE)
-  hstem(p, x0, x0 + w, STROKE / 2, STROKE)
-  legStroke(p, x0 + STROKE, x0 + w - STROKE, STROKE, CAP - STROKE, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const x0 = LSB
+  thinBar(p, x0, x0 + w, CAP - STEM_MED / 2, STEM_MED)
+  thinBar(p, x0, x0 + w, STEM_MED / 2, STEM_MED)
+  legStroke(
+    p,
+    x0 + w - STEM_THICK * 0.4,
+    x0 + STEM_THICK * 0.4,
+    STEM_MED * 0.5,
+    CAP - STEM_MED * 0.5,
+    STEM_THICK * 0.95,
+  )
+  return { advance: LSB + w + RSB }
 }
 
 // ---------------------------------------------------------------------------
-// Digits — simplified
+// Digits (lined, at CAP height)
 // ---------------------------------------------------------------------------
 
 const dZero: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const rx = (w - STROKE) / 2
-  const cx = CAP_LSB + rx + STROKE / 2
-  ovalBowl(p, cx, CAP / 2, rx, CAP / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP / 2, rx, CAP / 2)
+  return { advance: LSB + w + RSB }
 }
 
 const dOne: Drawer = (p) => {
-  const w = CAP_W * 0.35
-  const stemX = CAP_LSB + w / 2
-  stem(p, stemX, 0, CAP, STROKE)
-  legStroke(p, stemX - w * 0.35, stemX, CAP * 0.78, CAP, THIN)
-  hstem(p, stemX - w * 0.3, stemX + w * 0.3, STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.42
+  const stemX = LSB + w / 2
+  thickStem(p, stemX, 0, CAP)
+  legStroke(p, stemX - w * 0.3, stemX, CAP * 0.78, CAP, STEM_THIN)
+  thinBar(p, stemX - w * 0.35, stemX + w * 0.35, STEM_MED / 2 + 4, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 const dTwo: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  halfRing(p, x0 + rx + STROKE / 2, CAP * 0.72, rx, CAP * 0.28, STROKE, 'top')
-  legStroke(p, x0 + w - STROKE / 2, x0 + STROKE / 2, CAP * 0.5, STROKE, STROKE)
-  hstem(p, x0, x0 + w, STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  halfRing(p, cx, CAP * 0.72, rx, CAP * 0.28, STEM_THICK, 'top')
+  legStroke(p, LSB + w - STEM_THICK / 2, LSB + STEM_THIN, CAP * 0.5, STEM_MED, STEM_THICK * 0.85)
+  thinBar(p, LSB, LSB + w, STEM_MED / 2 + 4, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 const dThree: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  halfRing(p, cx, CAP * 0.72, rx, CAP * 0.28, STROKE, 'right')
-  halfRing(p, cx, CAP * 0.28, rx, CAP * 0.28, STROKE, 'right')
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  halfRing(p, cx, CAP * 0.72, rx, CAP * 0.28, STEM_THICK, 'right')
+  halfRing(p, cx, CAP * 0.28, rx, CAP * 0.28, STEM_THICK, 'right')
+  return { advance: LSB + w + RSB }
 }
 
 const dFour: Drawer = (p) => {
-  const w = CAP_W * 0.6
-  const x0 = CAP_LSB
-  stem(p, x0 + w - STROKE, 0, CAP, STROKE)
-  legStroke(p, x0 + STROKE / 2, x0 + w - STROKE, CAP * 0.35, CAP, STROKE)
-  hstem(p, x0, x0 + w, CAP * 0.35, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.62
+  const stemX = LSB + w - STEM_THICK / 2
+  thickStem(p, stemX, 0, CAP)
+  legStroke(p, LSB + STEM_THIN, stemX - STEM_THICK / 2, CAP * 0.38, CAP, STEM_THIN)
+  thinBar(p, LSB, LSB + w, CAP * 0.38, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 const dFive: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  halfRing(p, cx, CAP * 0.3, rx, CAP * 0.3, STROKE, 'right')
-  stem(p, x0 + STROKE / 2, CAP * 0.6, CAP, STROKE)
-  hstem(p, x0 + STROKE / 2, x0 + w, CAP - STROKE / 2, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  halfRing(p, cx, CAP * 0.3, rx, CAP * 0.3, STEM_THICK, 'right')
+  thickStem(p, LSB + STEM_THICK / 2, CAP * 0.6, CAP)
+  thinBar(p, LSB + STEM_THICK / 2, LSB + w, CAP - STEM_MED / 2 - 4, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 const dSix: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  ovalBowl(p, cx, CAP * 0.3, rx, CAP * 0.3, STROKE)
-  legStroke(p, cx, cx + rx * 0.6, CAP * 0.3 + STROKE / 2, CAP, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP * 0.3, rx, CAP * 0.3)
+  legStroke(p, cx - rx + STEM_THICK / 2, cx + rx * 0.3, CAP * 0.3 + STEM_THICK / 2, CAP, STEM_THICK * 0.9)
+  return { advance: LSB + w + RSB }
 }
 
 const dSeven: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  hstem(p, x0, x0 + w, CAP - STROKE / 2, STROKE)
-  legStroke(p, x0 + w - STROKE, x0 + STROKE, CAP - STROKE, 0, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  thinBar(p, LSB, LSB + w, CAP - STEM_MED / 2 - 4, STEM_MED)
+  legStroke(p, LSB + w - STEM_THICK, LSB + STEM_THIN, CAP - STEM_MED, 0, STEM_THICK * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
 const dEight: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  ovalBowl(p, cx, CAP * 0.72, rx, CAP * 0.28, STROKE)
-  ovalBowl(p, cx, CAP * 0.28, rx, CAP * 0.28, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP * 0.72, rx * 0.9, CAP * 0.26)
+  brushBowl(p, cx, CAP * 0.28, rx, CAP * 0.28)
+  return { advance: LSB + w + RSB }
 }
 
 const dNine: Drawer = (p) => {
-  const w = CAP_W * 0.55
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  ovalBowl(p, cx, CAP * 0.7, rx, CAP * 0.3, STROKE)
-  legStroke(p, cx, cx - rx * 0.6, CAP * 0.7 - STROKE / 2, 0, STROKE)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.58
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  brushBowl(p, cx, CAP * 0.7, rx, CAP * 0.3)
+  legStroke(p, cx + rx - STEM_THICK / 2, cx - rx * 0.3, CAP * 0.7 - STEM_THICK / 2, 0, STEM_THICK * 0.9)
+  return { advance: LSB + w + RSB }
 }
 
 // ---------------------------------------------------------------------------
@@ -954,112 +1027,105 @@ const dNine: Drawer = (p) => {
 // ---------------------------------------------------------------------------
 
 const dPeriod: Drawer = (p) => {
-  const r = STROKE * 0.55
-  const w = r * 5
+  const r = STEM_THICK * 0.5
+  const w = r * 4.5
   ellipse(p, w / 2, r, r, r)
   return { advance: w }
 }
 
 const dComma: Drawer = (p) => {
-  const r = STROKE * 0.55
-  const w = r * 5
+  const r = STEM_THICK * 0.5
+  const w = r * 4.5
   ellipse(p, w / 2, r, r, r)
-  legStroke(p, w / 2, w / 2 - r * 0.8, r, DESC * 0.4, r * 1.2)
+  legStroke(p, w / 2, w / 2 - r * 0.8, r, DESC * 0.35, r * 1.1)
   return { advance: w }
 }
 
 const dColon: Drawer = (p) => {
-  const r = STROKE * 0.55
-  const w = r * 5
+  const r = STEM_THICK * 0.5
+  const w = r * 4.5
   ellipse(p, w / 2, r, r, r)
   ellipse(p, w / 2, XH - r, r, r)
   return { advance: w }
 }
 
 const dSemicolon: Drawer = (p) => {
-  const r = STROKE * 0.55
-  const w = r * 5
+  const r = STEM_THICK * 0.5
+  const w = r * 4.5
   ellipse(p, w / 2, XH - r, r, r)
   ellipse(p, w / 2, r, r, r)
-  legStroke(p, w / 2, w / 2 - r * 0.8, r, DESC * 0.4, r * 1.2)
+  legStroke(p, w / 2, w / 2 - r * 0.8, r, DESC * 0.35, r * 1.1)
   return { advance: w }
 }
 
 const dExclam: Drawer = (p) => {
-  const w = NARROW * 0.6
-  const cx = CAP_LSB + w / 2
-  stem(p, cx, XH * 0.45, CAP, STROKE * 0.9)
-  ellipse(p, cx, STROKE * 0.55, STROKE * 0.55, STROKE * 0.55)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_NARROW * 0.5
+  const cx = LSB + w / 2
+  thickStem(p, cx, XH * 0.4, CAP)
+  ellipse(p, cx, STEM_THICK * 0.5, STEM_THICK * 0.5, STEM_THICK * 0.5)
+  return { advance: LSB + w + RSB }
 }
 
 const dQuestion: Drawer = (p) => {
-  const w = CAP_W * 0.5
-  const x0 = CAP_LSB
-  const rx = (w - STROKE) / 2
-  const cx = x0 + rx + STROKE / 2
-  halfRing(p, cx, CAP * 0.75, rx, CAP * 0.2, STROKE, 'top')
-  stem(p, cx + rx * 0.1, CAP * 0.35, CAP * 0.55, STROKE)
-  ellipse(p, cx + rx * 0.1, STROKE * 0.55, STROKE * 0.55, STROKE * 0.55)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_W * 0.55
+  const rx = (w - STEM_THICK) / 2
+  const cx = LSB + rx + STEM_THICK / 2
+  halfRing(p, cx, CAP * 0.75, rx, CAP * 0.2, STEM_THICK, 'top')
+  thickStem(p, cx + rx * 0.1, CAP * 0.32, CAP * 0.55)
+  ellipse(p, cx + rx * 0.1, STEM_THICK * 0.5, STEM_THICK * 0.5, STEM_THICK * 0.5)
+  return { advance: LSB + w + RSB }
 }
 
 const dHyphen: Drawer = (p) => {
-  const w = CAP_W * 0.4
-  const adv = CAP_LSB + w + CAP_RSB
-  hstem(p, CAP_LSB, CAP_LSB + w, XH * 0.5, STROKE * 0.95)
-  return { advance: adv }
+  const w = CAP_W * 0.42
+  thinBar(p, LSB, LSB + w, XH * 0.5, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 const dApostrophe: Drawer = (p) => {
-  const w = NARROW * 0.5
-  const cx = CAP_LSB + w / 2
-  legStroke(p, cx, cx - 5, CAP * 0.72, CAP * 0.98, STROKE * 1.1)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_NARROW * 0.5
+  const cx = LSB + w / 2
+  legStroke(p, cx, cx - 10, CAP * 0.72, CAP * 0.98, STEM_THICK)
+  return { advance: LSB + w + RSB }
 }
 
 const dQuotedbl: Drawer = (p) => {
-  const w = NARROW * 0.8
-  const cx0 = CAP_LSB + w * 0.3
-  const cx1 = CAP_LSB + w * 0.7
-  legStroke(p, cx0, cx0 - 5, CAP * 0.72, CAP * 0.98, STROKE * 1.1)
-  legStroke(p, cx1, cx1 - 5, CAP * 0.72, CAP * 0.98, STROKE * 1.1)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  const w = CAP_NARROW * 0.85
+  const cx0 = LSB + w * 0.3
+  const cx1 = LSB + w * 0.7
+  legStroke(p, cx0, cx0 - 10, CAP * 0.72, CAP * 0.98, STEM_THICK)
+  legStroke(p, cx1, cx1 - 10, CAP * 0.72, CAP * 0.98, STEM_THICK)
+  return { advance: LSB + w + RSB }
 }
 
 const dAmpersand: Drawer = (p) => {
   const w = CAP_W * 0.9
-  const x0 = CAP_LSB
-  // a simple flattened "&" — two stacked ovals linked by a diagonal
-  ovalBowl(p, x0 + w * 0.3, CAP * 0.75, w * 0.22, CAP * 0.2, STROKE)
-  ovalBowl(p, x0 + w * 0.42, CAP * 0.28, w * 0.3, CAP * 0.25, STROKE)
-  legStroke(p, x0 + w * 0.18, x0 + w * 0.88, CAP * 0.1, CAP * 0.55, STROKE * 0.9)
-  return { advance: CAP_LSB + w + CAP_RSB }
+  brushBowl(p, LSB + w * 0.3, CAP * 0.76, w * 0.22, CAP * 0.18)
+  brushBowl(p, LSB + w * 0.42, CAP * 0.28, w * 0.3, CAP * 0.25)
+  legStroke(p, LSB + w * 0.18, LSB + w * 0.88, CAP * 0.1, CAP * 0.55, STEM_THICK * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
 const dParenLeft: Drawer = (p) => {
-  const w = NARROW * 0.55
-  const adv = CAP_LSB + w + CAP_RSB
-  halfRing(p, CAP_LSB + w, CAP * 0.45, w * 0.85, CAP * 0.6, STROKE * 0.9, 'left')
-  return { advance: adv }
+  const w = CAP_NARROW * 0.55
+  halfRing(p, LSB + w, CAP * 0.45, w * 0.85, CAP * 0.6, STEM_MED, 'left')
+  return { advance: LSB + w + RSB }
 }
 
 const dParenRight: Drawer = (p) => {
-  const w = NARROW * 0.55
-  const adv = CAP_LSB + w + CAP_RSB
-  halfRing(p, CAP_LSB, CAP * 0.45, w * 0.85, CAP * 0.6, STROKE * 0.9, 'right')
-  return { advance: adv }
+  const w = CAP_NARROW * 0.55
+  halfRing(p, LSB, CAP * 0.45, w * 0.85, CAP * 0.6, STEM_MED, 'right')
+  return { advance: LSB + w + RSB }
 }
 
 const dSlash: Drawer = (p) => {
   const w = CAP_W * 0.5
-  const adv = CAP_LSB + w + CAP_RSB
-  legStroke(p, CAP_LSB, CAP_LSB + w, -STROKE * 0.5, CAP, STROKE)
-  return { advance: adv }
+  legStroke(p, LSB, LSB + w, -STEM_THICK * 0.4, CAP, STEM_THICK * 0.85)
+  return { advance: LSB + w + RSB }
 }
 
 const dMiddot: Drawer = (p) => {
-  const r = STROKE * 0.55
+  const r = STEM_THICK * 0.5
   const adv = r * 5
   ellipse(p, adv / 2, XH * 0.5, r, r)
   return { advance: adv }
@@ -1067,75 +1133,88 @@ const dMiddot: Drawer = (p) => {
 
 const dEmdash: Drawer = (p) => {
   const w = CAP
-  const adv = CAP_LSB + w + CAP_RSB
-  hstem(p, CAP_LSB, CAP_LSB + w, XH * 0.5, STROKE * 0.95)
-  return { advance: adv }
+  thinBar(p, LSB, LSB + w, XH * 0.5, STEM_MED)
+  return { advance: LSB + w + RSB }
 }
 
 // ---------------------------------------------------------------------------
-// Ligatures — draw each as a combined glyph (same shapes but tucked closer)
+// Ligatures — each ligature draws two full copies of the letter placed
+// slightly closer together than normal, so that the two shapes kiss or
+// overlap in ink rather than render as a separated "=" sign.
 // ---------------------------------------------------------------------------
 
+// o_o — two bowls close together
 const ooLig: Drawer = (p) => {
   const w = LC_W - 20
-  const rx = (w - STROKE) / 2
-  const cx1 = LSB + rx + STROKE / 2
-  const cx2 = cx1 + w - 20    // slightly tucked
-  ovalBowl(p, cx1, XH / 2, rx, XH / 2, STROKE)
-  ovalBowl(p, cx2, XH / 2, rx, XH / 2, STROKE)
-  exitTail(p, cx2 + rx - STROKE * 0.1, XH / 2 - STROKE * 0.2, 65, 0)
-  return { advance: LSB + (cx2 + rx + STROKE / 2 - LSB) + RSB - 20 }
+  const rx = (w - STEM_THICK) / 2
+  const cy = XH / 2
+  const cx1 = LSB + rx + STEM_THICK / 2
+  // offset second bowl by roughly bowl width minus overlap
+  const gap = rx * 2 + STEM_THICK - 20
+  const cx2 = cx1 + gap
+  brushBowl(p, cx1, cy, rx, cy)
+  brushBowl(p, cx2, cy, rx, cy)
+  exitTick(p, cx2 + rx - STEM_THICK * 0.15, 55, 80)
+  const right = cx2 + rx + STEM_THICK / 2
+  return { advance: right - LSB + LSB + RSB }
 }
 
+// l_l — two tall ascender stems close together
 const llLig: Drawer = (p) => {
-  const w = NARROW
-  const s1 = LSB + STROKE / 2 + 20
-  const s2 = s1 + (w - 20)
-  stem(p, s1, 0, ASC - 30, STROKE)
-  stem(p, s2, 0, ASC - 30, STROKE)
-  exitTail(p, s2 + STROKE / 2, STROKE * 0.3, 70, 0)
-  return { advance: LSB + (s2 - LSB) + RSB + 40 }
+  const w = LC_NARROW
+  const s1 = LSB + w / 2
+  const s2 = s1 + w - 20    // second l tucked in
+  thickStem(p, s1, 0, ASC - 40)
+  thickStem(p, s2, 0, ASC - 40)
+  exitTick(p, s2 + STEM_THICK / 2, 60, 90)
+  return { advance: s2 + STEM_THICK / 2 - LSB + LSB + RSB }
 }
 
+// t_t — two stems sharing a single long thin crossbar
 const ttLig: Drawer = (p) => {
-  const s1 = LSB + STROKE / 2 + 20
-  const s2 = s1 + NARROW - 10
-  stem(p, s1, 0, XH + 120, STROKE)
-  stem(p, s2, 0, XH + 120, STROKE)
-  // shared crossbar
-  hstem(p, s1 - STROKE * 1.0, s2 + STROKE * 1.0, XH - STROKE / 2, THIN)
-  exitTail(p, s2 + STROKE / 2, STROKE * 0.3, 65, 0)
-  return { advance: LSB + (s2 - LSB) + RSB + 30 }
+  const stemSpan = LC_NARROW + 40
+  const s1 = LSB + STEM_THICK / 2 + 20
+  const s2 = s1 + stemSpan - 40
+  thickStem(p, s1, 0, XH + 140)
+  thickStem(p, s2, 0, XH + 140)
+  // shared thin crossbar spanning both
+  thinBar(p, s1 - STEM_THICK * 0.9, s2 + STEM_THICK * 1.1, XH - STEM_THIN, STEM_THIN)
+  exitTick(p, s2 + STEM_THICK / 2, 55, 85)
+  return { advance: s2 + STEM_THICK / 2 - LSB + LSB + RSB }
 }
 
+// e_e — two e's close together
 const eeLig: Drawer = (p) => {
   const w = LC_W - 30
-  const rx = (w - STROKE) / 2
-  const cx1 = LSB + rx + STROKE / 2
-  const cx2 = cx1 + w - 20
+  const rx = (w - STEM_THICK) / 2
   const cy = XH / 2
-  ovalBowl(p, cx1, cy, rx, XH / 2, STROKE)
-  rect(p, cx1 - rx + STROKE * 0.4, cy - THIN / 2, rx * 2 - STROKE * 0.8, THIN)
-  ovalBowl(p, cx2, cy, rx, XH / 2, STROKE)
-  rect(p, cx2 - rx + STROKE * 0.4, cy - THIN / 2, rx * 2 - STROKE * 0.8, THIN)
-  exitTail(p, cx2 + rx - STROKE * 0.2, STROKE * 0.3, 70, 0)
-  return { advance: LSB + (cx2 + rx + STROKE / 2 - LSB) + RSB - 20 }
+  const cx1 = LSB + rx + STEM_THICK / 2
+  const gap = rx * 2 + STEM_THICK - 20
+  const cx2 = cx1 + gap
+  brushBowl(p, cx1, cy, rx, cy)
+  const barW = rx * 2 - STEM_THICK * 0.8
+  thinBar(p, cx1 - barW / 2, cx1 + barW / 2, cy, STEM_THIN)
+  brushBowl(p, cx2, cy, rx, cy)
+  thinBar(p, cx2 - barW / 2, cx2 + barW / 2, cy, STEM_THIN)
+  exitTick(p, cx2 + rx - STEM_THICK * 0.2, 55, 80)
+  return { advance: cx2 + rx + STEM_THICK / 2 - LSB + LSB + RSB }
 }
 
+// s_s — two s shapes close together
 const ssLig: Drawer = (p) => {
   const w = LC_W - 60
-  const rx = (w - STROKE) / 2
-  const cx1 = LSB + rx + STROKE / 2
-  const cx2 = cx1 + w - 10
-  const ry = XH * 0.28
-  halfRing(p, cx1, XH * 0.72, rx, ry, STROKE, 'top')
-  halfRing(p, cx1, XH * 0.28, rx, ry, STROKE, 'bottom')
-  rect(p, cx1 - STROKE * 0.3, XH * 0.3, STROKE * 0.8, XH * 0.4)
-  halfRing(p, cx2, XH * 0.72, rx, ry, STROKE, 'top')
-  halfRing(p, cx2, XH * 0.28, rx, ry, STROKE, 'bottom')
-  rect(p, cx2 - STROKE * 0.3, XH * 0.3, STROKE * 0.8, XH * 0.4)
-  exitTail(p, cx2 + rx - STROKE * 0.2, STROKE * 0.3, 65, 0)
-  return { advance: LSB + (cx2 + rx + STROKE / 2 - LSB) + RSB - 10 }
+  const rx = (w - STEM_THICK) / 2
+  const cx1 = LSB + rx + STEM_THICK / 2
+  const gap = rx * 2 + STEM_THICK - 15
+  const cx2 = cx1 + gap
+  const ry = XH * 0.25
+  halfRing(p, cx1, XH - ry, rx, ry, STEM_MED, 'top')
+  halfRing(p, cx1, ry, rx, ry, STEM_MED, 'bottom')
+  legStroke(p, cx1 + rx * 0.55, cx1 - rx * 0.55, ry, XH - ry, STEM_THICK * 0.85)
+  halfRing(p, cx2, XH - ry, rx, ry, STEM_MED, 'top')
+  halfRing(p, cx2, ry, rx, ry, STEM_MED, 'bottom')
+  legStroke(p, cx2 + rx * 0.55, cx2 - rx * 0.55, ry, XH - ry, STEM_THICK * 0.85)
+  return { advance: cx2 + rx + STEM_THICK / 2 - LSB + LSB + RSB }
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,7 +1314,7 @@ const GLYPHS: GlyphSpec[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// Build
+// Build: shear, auto-pad LSB, clamp advance to bbox + RSB.
 // ---------------------------------------------------------------------------
 
 async function build() {
@@ -1248,7 +1327,7 @@ async function build() {
   const space = new opentype.Glyph({
     name: 'space',
     unicode: 0x20,
-    advanceWidth: Math.round(LC_W * 0.55),
+    advanceWidth: Math.round(LC_W * 0.5),
     path: new opentype.Path(),
   })
   ;(space as opentype.Glyph & { unicodes: number[] }).unicodes = [0x20, 0xA0]
@@ -1256,17 +1335,44 @@ async function build() {
   const glyphs: opentype.Glyph[] = [notdef, space]
   const indexByName: Record<string, number> = {}
 
-  // Extra advance to account for shear pushing right edge of glyph further right.
-  const SLANT_ADV = SHEAR * CAP * 0.35
-
   for (const spec of GLYPHS) {
     const path = new opentype.Path()
-    const { advance } = spec.draw(path)
+    let { advance } = spec.draw(path)
+
+    // 1) Apply italic shear to every path command.
     applyShear(path)
+
+    // 2) Normalize horizontal position. Shear pushes high-y points rightward,
+    //    so after shear the visible bbox typically starts well to the right
+    //    of the intended LSB. We translate the path so xMin == LSB — this
+    //    both prevents paths extending left of LSB (the "Campmat  e" bug)
+    //    and pulls rightward-drifted glyphs back in, so letters don't have
+    //    huge left-side whitespace. The advance is reduced by the same
+    //    amount so the next letter sits right where we want.
+    const bb = path.getBoundingBox()
+    const dx = LSB - bb.x1
+    if (Math.abs(dx) > 0.5) {
+      for (const cmd of path.commands as Array<Record<string, number>>) {
+        if ('x' in cmd) cmd.x += dx
+        if ('x1' in cmd) cmd.x1 += dx
+        if ('x2' in cmd) cmd.x2 += dx
+      }
+      advance += dx
+    }
+
+    // 3) Script faces overlap by design: the top of this glyph (pushed
+    //    right by shear) is allowed to hang over the LSB whitespace of
+    //    the next glyph. We therefore do NOT clamp advance to bbox.x2 + RSB.
+    //    Instead, we only ensure the *baseline* right edge (x-height and
+    //    below) plus RSB fits; the ascender overhang is permitted.
+    const baselineRight = estimateBaselineRightEdge(path)
+    const minAdvance = baselineRight + RSB
+    if (advance < minAdvance) advance = minAdvance
+
     const g = new opentype.Glyph({
       name: spec.name,
       unicode: spec.unicode ?? 0,
-      advanceWidth: advance + SLANT_ADV,
+      advanceWidth: Math.round(advance),
       path,
     })
     indexByName[spec.name] = glyphs.length
@@ -1284,15 +1390,15 @@ async function build() {
     manufacturer: 'NPS Fonts',
     license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
     licenseURL: 'https://openfontlicense.org',
-    version: '0.8.0',
-    description: 'Campmate Script — USFS wood-sign brush-script, connected cursive italic with ligatures.',
+    version: '0.9.0',
+    description: 'Campmate Script — USFS/NPS trailhead-sign brush-script. Connected cursive with brush contrast (thick downstrokes, thin upstrokes) and 15° italic slant. Includes oo/ll/tt/ee/ss ligatures via OpenType liga GSUB.',
     copyright: 'Copyright (c) 2026, NPS Fonts contributors. With Reserved Font Name "Campmate Script".',
     trademark: '',
     glyphs,
   })
 
   if (font.tables.os2) {
-    font.tables.os2.usWeightClass = 400
+    font.tables.os2.usWeightClass = 500
     font.tables.os2.achVendID = 'NPSF'
     font.tables.os2.fsSelection = 0x41  // italic + regular
   }
@@ -1311,9 +1417,9 @@ async function build() {
   const sub = font.substitution as unknown as {
     add: (feature: string, entry: { sub: number[], by: number }) => void
   }
-  for (const [a, b, lig] of ligaturePairs) {
+  for (const [aName, bName, lig] of ligaturePairs) {
     sub.add('liga', {
-      sub: [indexByName[a]!, indexByName[b]!],
+      sub: [indexByName[aName]!, indexByName[bName]!],
       by: indexByName[lig]!,
     })
   }
@@ -1331,7 +1437,9 @@ async function build() {
   const woff2Buf = Buffer.from(await wawoff2.compress(otfBuf))
   await writeFile(resolve(FONTS_DIR, 'woff2', 'CampmateScript-Regular.woff2'), woff2Buf)
 
-  console.log(`Campmate Script: ${GLYPHS.length} glyphs (${ligaturePairs.length} ligatures) · ${(otfBuf.length / 1024).toFixed(1)}KB OTF`)
+  console.log(`✓ Campmate Script: ${GLYPHS.length} glyphs (${ligaturePairs.length} ligatures) · ${(otfBuf.length / 1024).toFixed(1)}KB OTF`)
 }
 
 await build()
+
+export const CAMPMATE_GLYPHS = GLYPHS

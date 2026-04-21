@@ -1002,20 +1002,20 @@ const two: Drawer = (p) => {
   return { advance: LSB + w + RSB }
 }
 const three: Drawer = (p) => {
-  const w = CAP * 0.64
+  const w = CAP * 0.66
   const x0 = LSB
-  const cx = x0 + w / 2
-  const upperCY = CAP * 0.74
-  const lowerCY = CAP * 0.26
-  const rx = w / 2
-  const ry = CAP * 0.26
-  const OV = 2
-  halfRing(p, cx, upperCY, rx, ry, STROKE, 'right')
-  halfRing(p, cx, lowerCY, rx, ry, STROKE, 'right')
-  rect(p, cx - STROKE * 0.4 - OV, CAP / 2 - STROKE * 0.4, STROKE * 1.4 + OV * 2, STROKE * 0.85)
-  // Ball terminals on upper-left and lower-left (the open ends of both halfRings)
-  ballTerminal(p, x0 + STROKE / 2, upperCY + 5, DROP_W, DROP_H)
-  ballTerminal(p, x0 + STROKE / 2, lowerCY - 5, DROP_W, DROP_H)
+  const flatX = x0 + STROKE / 2
+  const rx = w - STROKE
+  const upperCY = CAP * 0.73
+  const lowerCY = CAP * 0.27
+  const ry = CAP * 0.27
+  halfRing(p, flatX, upperCY, rx, ry, STROKE, 'right')
+  halfRing(p, flatX, lowerCY, rx, ry, STROKE, 'right')
+  // Middle junction on the right: fills gap between arcs
+  rect(p, flatX + rx - STROKE, CAP / 2 - STROKE * 0.5, STROKE, STROKE)
+  // Ball terminals at the arc's top-left (upper) and bottom-left (lower) endpoints
+  ballTerminal(p, flatX + DROP_W * 0.2, upperCY + ry - STROKE * 0.5, DROP_W, DROP_H)
+  ballTerminal(p, flatX + DROP_W * 0.2, lowerCY - ry + STROKE * 0.5, DROP_W, DROP_H)
   return { advance: LSB + w + RSB }
 }
 const four: Drawer = (p) => {
@@ -1031,16 +1031,23 @@ const four: Drawer = (p) => {
   return { advance: LSB + w + RSB }
 }
 const five: Drawer = (p) => {
-  const w = CAP * 0.64
+  const w = CAP * 0.66
   const x0 = LSB
-  const cx = x0 + w / 2
+  const flatX = x0 + STROKE / 2
   const OV = 2
+  // Top horizontal bar
   rect(p, x0, CAP - STROKE, w, STROKE)
-  rect(p, x0, CAP * 0.5, STROKE, CAP / 2)
-  halfRing(p, cx, CAP * 0.30, w / 2, CAP * 0.30, STROKE, 'right')
-  rect(p, x0, CAP * 0.5, STROKE * 1.5 + OV, STROKE)
-  // Ball terminal lower-left (end of halfRing)
-  ballTerminal(p, x0 + STROKE / 2, CAP * 0.30 - CAP * 0.30 + 5, DROP_W, DROP_H)
+  // Left vertical stem from top down to mid
+  rect(p, x0, CAP * 0.52, STROKE, CAP * 0.48)
+  // Short nub extending right at mid (where stem ends into bowl)
+  rect(p, x0, CAP * 0.52 - OV, STROKE * 1.5 + OV, STROKE)
+  // Bottom bowl: half-ring opening left
+  const bowlCY = CAP * 0.30
+  const bowlRY = CAP * 0.30
+  const bowlRX = w - STROKE
+  halfRing(p, flatX, bowlCY, bowlRX, bowlRY, STROKE, 'right')
+  // Ball terminal at the bowl's bottom-left endpoint
+  ballTerminal(p, flatX + DROP_W * 0.2, bowlCY - bowlRY + STROKE * 0.5, DROP_W, DROP_H)
   return { advance: LSB + w + RSB }
 }
 const six: Drawer = (p) => {
@@ -1051,12 +1058,17 @@ const six: Drawer = (p) => {
   const lowerRY = CAP * 0.32
   const lowerCY = lowerRY
   const lowerRX = w / 2
+  // Lower bowl
   ellipse(p, cx, lowerCY, lowerRX, lowerRY)
   ellipse(p, cx, lowerCY, lowerRX - STROKE, lowerRY - STROKE, true)
-  rect(p, x0, lowerCY - OV, STROKE, CAP - lowerCY - STROKE + OV)
-  halfRing(p, x0 + STROKE + (w - STROKE) / 4, CAP - STROKE, (w - STROKE) / 4, STROKE * 0.9, STROKE * 0.85, 'top')
-  // Ball terminal at top of the upper hook
-  ballTerminal(p, x0 + STROKE + (w - STROKE) / 2 - 5, CAP - STROKE - STROKE * 0.4, DROP_W, DROP_H)
+  // Upper hook: stem descending from top-left to the bowl
+  rect(p, x0, lowerCY - OV, STROKE, CAP - lowerCY - STROKE * 0.3 + OV)
+  // Top half-ring from top-left curving right — forming the top of "6"
+  const topRX = (w - STROKE) * 0.55
+  const topCX = x0 + STROKE / 2 + topRX
+  halfRing(p, topCX, CAP - STROKE / 2, topRX, STROKE * 0.9, STROKE, 'top')
+  // Ball terminal at the right endpoint of the top hook
+  ballTerminal(p, topCX + topRX - STROKE * 0.4, CAP - STROKE * 0.45, DROP_W, DROP_H)
   return { advance: LSB + w + RSB }
 }
 const seven: Drawer = (p) => {
@@ -1092,12 +1104,17 @@ const nine: Drawer = (p) => {
   const upperRY = CAP * 0.32
   const upperCY = CAP - upperRY
   const upperRX = w / 2
+  // Upper bowl
   ellipse(p, cx, upperCY, upperRX, upperRY)
   ellipse(p, cx, upperCY, upperRX - STROKE, upperRY - STROKE, true)
-  rect(p, x0 + w - STROKE, STROKE, STROKE, upperCY - STROKE + OV)
-  halfRing(p, x0 + STROKE + (w - STROKE) * 0.75 / 2, STROKE, (w - STROKE) / 4, STROKE * 0.9, STROKE * 0.85, 'bottom')
-  // Ball terminal at bottom of lower hook
-  ballTerminal(p, x0 + STROKE * 0.5, STROKE + STROKE * 0.3, DROP_W, DROP_H)
+  // Stem descending from bowl right-side to near baseline
+  rect(p, x0 + w - STROKE, STROKE * 0.3 - OV, STROKE, upperCY - STROKE * 0.3 + OV)
+  // Bottom hook: half-ring from stem curving left
+  const botRX = (w - STROKE) * 0.55
+  const botCX = x0 + w - STROKE / 2 - botRX
+  halfRing(p, botCX, STROKE / 2, botRX, STROKE * 0.9, STROKE, 'bottom')
+  // Ball terminal at the left endpoint of the bottom hook
+  ballTerminal(p, botCX - botRX + STROKE * 0.4, STROKE * 0.45, DROP_W, DROP_H)
   return { advance: LSB + w + RSB }
 }
 
@@ -1301,7 +1318,20 @@ async function build() {
 
   for (const spec of GLYPHS) {
     const path = new opentype.Path()
-    const { advance } = spec.draw(path)
+    let { advance } = spec.draw(path)
+    const bb = path.getBoundingBox()
+    const leftOverflow = LSB - bb.x1
+    if (leftOverflow > 0.5) {
+      for (const cmd of path.commands as Array<Record<string, number>>) {
+        if ('x' in cmd) cmd.x += leftOverflow
+        if ('x1' in cmd) cmd.x1 += leftOverflow
+        if ('x2' in cmd) cmd.x2 += leftOverflow
+      }
+      advance += leftOverflow
+    }
+    const bb2 = path.getBoundingBox()
+    const minAdvance = bb2.x2 + RSB
+    if (advance < minAdvance) advance = minAdvance
     const g = new opentype.Glyph({
       name: spec.name,
       unicode: spec.unicodes[0]!,
