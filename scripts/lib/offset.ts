@@ -28,23 +28,37 @@ function signedArea(contour: Contour): number {
 }
 
 /**
- * Offset a single contour by `d` em units along its outward normal.
- * Negative `d` shrinks; positive `d` grows. Works with TrueType quadratic
- * contours (on/off-curve points) because every point gets the same normal
- * treatment regardless of type.
+ * Which winding a font uses for its outer contours. TrueType fonts vary:
+ *   - 'ccw': counter-clockwise in y-up (most fonts produced by
+ *     modern tools like Glyphs, RoboFont).
+ *   - 'cw':  clockwise in y-up (common in fonts exported from y-down
+ *     tooling like FontLab classic or older TrueType pipelines — the
+ *     NPS 1935 reference is in this camp).
  *
- * Winding convention: in TrueType's y-up space, CCW contours are outlines
- * (solid) and CW contours are holes. "Outward" for both means away from
- * the glyph's ink: outer contours grow outward, holes shrink inward — so
- * applying positive `d` uniformly thickens ink (the intuitive bolder case).
+ * Holes always have the opposite winding from outer.
  */
-export function offsetContour(contour: Contour, d: number): Contour {
+export type OuterWinding = 'ccw' | 'cw'
+
+/**
+ * Offset every point of a contour by `d` em units along the direction
+ * that makes positive `d` add ink (outer contours grow outward, hole
+ * contours shrink toward their centers). The direction is picked from
+ * the font's outer-contour winding convention — all contours in one
+ * font share a single perpendicular rotation:
+ *
+ *   outer=ccw → use `(dy, -dx)` (right-rotation in y-up)
+ *   outer=cw  → use `(-dy, dx)` (left-rotation in y-up)
+ *
+ * That single-direction rule automatically thickens outers (they grow
+ * outward from their own interior) and thins holes (they shrink into
+ * their own interior — which is empty — so the surrounding ink fills in).
+ */
+export function offsetContour(contour: Contour, d: number, outerWinding: OuterWinding = 'ccw'): Contour {
   const n = contour.length
   if (n < 2 || d === 0) return contour.map(p => ({ ...p }))
 
-  const ccw = signedArea(contour) > 0
   const outNormal = (dx: number, dy: number): [number, number] =>
-    ccw ? normalize(dy, -dx) : normalize(-dy, dx)
+    outerWinding === 'ccw' ? normalize(dy, -dx) : normalize(-dy, dx)
 
   const MITER_LIMIT = 8 // clamp sharp corners to avoid blow-ups
 
@@ -89,9 +103,31 @@ export function offsetContour(contour: Contour, d: number): Contour {
  * own contours) are left untouched — they compose from referenced glyphs
  * which will themselves be offset.
  */
-export function offsetContours(contours: Contour[] | undefined, d: number): Contour[] | undefined {
+export function offsetContours(
+  contours: Contour[] | undefined,
+  d: number,
+  outerWinding: OuterWinding = 'ccw',
+): Contour[] | undefined {
   if (!contours) return contours
-  return contours.map(c => offsetContour(c, d))
+  return contours.map(c => offsetContour(c, d, outerWinding))
+}
+
+/**
+ * Infer the font-wide outer-contour winding from a representative glyph
+ * (one that's a simple single-contour shape like 'I' or a digit).
+ * Positive signed area in y-up = CCW; negative = CW.
+ */
+export function detectOuterWinding(contours: Contour[] | undefined): OuterWinding {
+  if (!contours || contours.length === 0) return 'ccw'
+  // Use the contour with the largest absolute signed area — that's the
+  // outer contour in a nested outer/hole setup.
+  let biggest = contours[0]!
+  let biggestAbs = Math.abs(signedArea(biggest))
+  for (let i = 1; i < contours.length; i++) {
+    const a = Math.abs(signedArea(contours[i]!))
+    if (a > biggestAbs) { biggest = contours[i]!; biggestAbs = a }
+  }
+  return signedArea(biggest) > 0 ? 'ccw' : 'cw'
 }
 
 export function recomputeBounds(contours: Contour[] | undefined): {

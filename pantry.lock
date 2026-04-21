@@ -7,11 +7,13 @@
       "dependencies": {
         "@resvg/resvg-js": "^2.6.2",
         "opentype.js": "^1.3.4",
+        "ts-font-editor": "link:ts-font-editor",
         "wawoff2": "^2.0.1"
       },
       "devDependencies": {
         "@types/bun": "latest",
         "@types/opentype.js": "^1.3.8",
+        "pngjs": "^7.0.0",
         "typescript": "^5.6.0"
       }
     },
@@ -20,13 +22,17 @@
       "version": "0.7.0",
       "dependencies": {
         "@nps-fonts/campmate-script": "0.7.0",
+        "@nps-fonts/nps-2026": "0.7.0",
         "@nps-fonts/nps-symbols": "0.7.0",
-        "@nps-fonts/redwood-serif": "0.7.0",
-        "@nps-fonts/summitgrade-1935": "0.7.0"
+        "@nps-fonts/redwood-serif": "0.7.0"
       }
     },
     "packages/campmate-script": {
       "name": "@nps-fonts/campmate-script",
+      "version": "0.7.0"
+    },
+    "packages/nps-2026": {
+      "name": "@nps-fonts/nps-2026",
       "version": "0.7.0"
     },
     "packages/nps-symbols": {
@@ -36,15 +42,16 @@
     "packages/redwood-serif": {
       "name": "@nps-fonts/redwood-serif",
       "version": "0.7.0"
-    },
-    "packages/summitgrade-1935": {
-      "name": "@nps-fonts/summitgrade-1935",
-      "version": "0.7.0"
     }
   },
   "packages": {
     "@nps-fonts/campmate-script@0.7.0": {
       "name": "@nps-fonts/campmate-script",
+      "version": "0.7.0",
+      "source": "npm"
+    },
+    "@nps-fonts/nps-2026@0.7.0": {
+      "name": "@nps-fonts/nps-2026",
       "version": "0.7.0",
       "source": "npm"
     },
@@ -55,11 +62,6 @@
     },
     "@nps-fonts/redwood-serif@0.7.0": {
       "name": "@nps-fonts/redwood-serif",
-      "version": "0.7.0",
-      "source": "npm"
-    },
-    "@nps-fonts/summitgrade-1935@0.7.0": {
-      "name": "@nps-fonts/summitgrade-1935",
       "version": "0.7.0",
       "source": "npm"
     },
@@ -84,6 +86,16 @@
     "opentype.js@^1.3.4": {
       "name": "opentype.js",
       "version": "^1.3.4",
+      "source": "npm"
+    },
+    "pngjs@^7.0.0": {
+      "name": "pngjs",
+      "version": "^7.0.0",
+      "source": "npm"
+    },
+    "ts-font-editor@link:ts-font-editor": {
+      "name": "ts-font-editor",
+      "version": "link:ts-font-editor",
       "source": "npm"
     },
     "typescriptlang.org@^5.6.0": {

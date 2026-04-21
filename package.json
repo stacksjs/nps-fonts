@@ -30,18 +30,20 @@
     "typecheck": "bunx --bun tsc --noEmit",
     "clean": "rm -rf fonts/**/{otf,ttf,woff,woff2,variable}/*.* web/dist specimens/*.pdf packages/*/dist",
     "release": "bun run build && bun run web && bun run pack:all",
-    "pack:all": "bun run scripts/pack.ts"
+    "pack:all": "bun run scripts/pack.ts",
+    "test": "bun test",
+    "verify": "bun run scripts/_verify-exact.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/opentype.js": "^1.3.8",
-    "fonteditor-core": "^2.6.3",
     "pngjs": "^7.0.0",
     "typescript": "^5.6.0"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "opentype.js": "^1.3.4",
+    "ts-font-editor": "link:ts-font-editor",
     "wawoff2": "^2.0.1"
   },
   "engines": {

@@ -2,30 +2,32 @@
 /**
  * NPS 2026 — 1930s-era NPS/WPA display face, variable weight.
  *
- * Outlines live in `sources/nps-2026/outlines.json` (extracted once; see
- * `scripts/_extract-source.ts`). US copyright law (37 CFR § 202.1(e)) holds
- * that typeface *designs* are not copyrightable; the repo ships the
+ * Outlines live in `sources/nps-2026/outlines.json` (extracted once via
+ * `scripts/_extract-source.ts`). US copyright law (37 CFR § 202.1(e))
+ * holds that typeface *designs* are not copyrightable; the repo ships the
  * transcribed geometry under its own family name and metadata.
  *
- * Build pipeline:
+ * Build pipeline (all pure TypeScript via `ts-font-editor` — no Python):
  *   1. Load pristine outlines.
  *   2. Apply `PATCHES` / `ADDITIONS`.
- *   3. Derive two additional masters (Thin / Black) by contour offsetting —
- *      point-compatible with the Regular master so they can interpolate.
- *   4. Write three intermediate TTFs, then shell out to fontTools varLib
- *      (Python) to merge them into a variable TTF with a `wght` axis.
- *   5. Also emit a static Regular in OTF/WOFF/WOFF2 for tools that don't
- *      handle variable fonts yet.
+ *   3. Derive Thin/Black masters via point-compatible contour offsetting.
+ *   4. Merge the three masters into a variable TTF with `buildVariableFont`.
+ *   5. Also emit a static Regular OTF/TTF/WOFF/WOFF2 for tools without VF.
  */
 
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
 import opentype from 'opentype.js'
-import { Font } from 'fonteditor-core'
+import {
+  buildVariableFont,
+  createInstance,
+  TTFReader,
+  TTFWriter,
+  type MasterInput,
+  type TTFObject,
+} from 'ts-font-editor'
 import { sfntToWoff } from './lib/woff.ts'
-import { offsetContour, recomputeBounds as recomputeOffsetBounds } from './lib/offset.ts'
+import { detectOuterWinding, offsetContour, recomputeBounds as recomputeOffsetBounds, type OuterWinding } from './lib/offset.ts'
 import type { Contour, GlyphAddition, GlyphPatch, Point } from '../sources/nps-2026/patches.ts'
 import { ADDITIONS, PATCHES } from '../sources/nps-2026/patches.ts'
 
@@ -34,20 +36,17 @@ const wawoff2 = await import('wawoff2')
 const ROOT = resolve(import.meta.dir, '..')
 const FONTS = resolve(ROOT, 'fonts', 'nps-2026')
 const OUTLINES = resolve(ROOT, 'sources', 'nps-2026', 'outlines.json')
-const TMP = resolve(ROOT, '.build', 'nps-2026-masters')
-const VENV_PY = resolve(ROOT, '.venv', 'bin', 'python')
-const VARLIB_PY = resolve(ROOT, 'scripts', 'lib', 'varlib_build.py')
 
 const FAMILY = 'NPS 2026'
 const POSTSCRIPT = 'NPS_2026'
-const COPYRIGHT = 'Copyright (c) 2026, NPS Fonts contributors. Outline geometry transcribed from a reference art-deco typeface; typeface designs are not copyrightable under 37 CFR § 202.1(e).'
+const COPYRIGHT = 'Copyright (c) 2026, NPS Fonts contributors. NPS 2026 outline geometry transcribed from a reference art-deco typeface; typeface designs are not copyrightable under 37 CFR § 202.1(e).'
 const DESCRIPTION = 'NPS 2026 — 1930s-era NPS/WPA display face (variable weight).'
 const VERSION = 'Version 1.000'
 
 /**
- * Weight axis masters. `offset` is the per-point normal-direction shift in
- * em units (source master = 0). `wght` is the `wght` axis location and also
- * the OS/2 usWeightClass for that static master.
+ * Weight-axis masters. `offset` is the per-point normal-direction shift
+ * applied to the pristine Regular outlines (Regular = 0). `wght` is both
+ * the `wght` axis location and each master's OS/2 usWeightClass.
  */
 const MASTERS = [
   { name: 'Thin', wght: 100, offset: -70 },
@@ -72,11 +71,11 @@ interface FontGlyph {
 }
 interface FontData {
   glyf: FontGlyph[]
-  name: Record<string, string>
+  name: Record<string, string | Array<{ nameID: number, value: string }>>
   [k: string]: unknown
 }
 
-async function loadPatchedData(): Promise<{ data: FontData; patched: string[]; added: string[] }> {
+async function loadPatchedData(): Promise<{ data: FontData, patched: string[], added: string[] }> {
   const data: FontData = JSON.parse(await readFile(OUTLINES, 'utf8'))
 
   const patched: string[] = []
@@ -97,48 +96,6 @@ async function loadPatchedData(): Promise<{ data: FontData; patched: string[]; a
   }
 
   return { data, patched, added }
-}
-
-function brandNameTable(data: FontData, styleName: string) {
-  data.name.copyright = COPYRIGHT
-  data.name.fontFamily = FAMILY
-  data.name.fontSubFamily = styleName
-  data.name.uniqueSubFamily = `NPSFonts: ${FAMILY} ${styleName}: 2026`
-  data.name.fullName = `${FAMILY} ${styleName}`
-  data.name.postScriptName = `${POSTSCRIPT}-${styleName.replace(/\s+/g, '')}`
-  data.name.tradeMark = ''
-  data.name.manufacturer = 'NPS Fonts contributors'
-  data.name.designer = 'NPS Fonts contributors'
-  data.name.description = DESCRIPTION
-  data.name.version = VERSION
-  data.name.preferredFamily = FAMILY
-  data.name.preferredSubFamily = styleName
-}
-
-function buildMasterTtf(base: FontData, master: MasterSpec): Buffer {
-  // Deep clone so the offset doesn't mutate the base.
-  const data: FontData = structuredClone(base)
-
-  if (master.offset !== 0) {
-    for (const g of data.glyf) {
-      if (!g.contours) continue // composite glyphs leave their contours untouched
-      g.contours = g.contours.map(c => offsetContour(c, master.offset))
-      const bb = recomputeOffsetBounds(g.contours)
-      g.xMin = bb.xMin; g.yMin = bb.yMin; g.xMax = bb.xMax; g.yMax = bb.yMax
-      g.leftSideBearing = bb.xMin
-    }
-  }
-
-  brandNameTable(data, master.name)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const anyData = data as any
-  if (anyData['OS/2']) {
-    anyData['OS/2'].usWeightClass = master.wght
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const f = Font.create(data as any)
-  return Buffer.from(f.write({ type: 'ttf', hinting: true }) as ArrayBuffer | Buffer)
 }
 
 function applyPatch(g: FontGlyph, patch: GlyphPatch) {
@@ -193,9 +150,51 @@ function additionToGlyph(a: GlyphAddition): FontGlyph {
   return g
 }
 
+function brandNameTable(data: FontData, styleName: string) {
+  data.name.copyright = COPYRIGHT
+  data.name.fontFamily = FAMILY
+  data.name.fontSubFamily = styleName
+  data.name.uniqueSubFamily = `NPSFonts: ${FAMILY} ${styleName}: 2026`
+  data.name.fullName = `${FAMILY} ${styleName}`
+  data.name.postScriptName = `${POSTSCRIPT}-${styleName.replace(/\s+/g, '')}`
+  data.name.tradeMark = ''
+  data.name.manufacturer = 'NPS Fonts contributors'
+  data.name.designer = 'NPS Fonts contributors'
+  data.name.description = DESCRIPTION
+  data.name.version = VERSION
+  data.name.preferredFamily = FAMILY
+  data.name.preferredSubFamily = styleName
+}
+
+function buildMasterTtf(base: FontData, master: MasterSpec, outerWinding: OuterWinding): { ttf: TTFObject, buf: Buffer } {
+  const data: FontData = structuredClone(base)
+
+  if (master.offset !== 0) {
+    for (const g of data.glyf) {
+      if (!g.contours) continue
+      g.contours = g.contours.map(c => offsetContour(c, master.offset, outerWinding))
+      const bb = recomputeOffsetBounds(g.contours)
+      g.xMin = bb.xMin; g.yMin = bb.yMin; g.xMax = bb.xMax; g.yMax = bb.yMax
+      g.leftSideBearing = bb.xMin
+    }
+  }
+
+  brandNameTable(data, master.name)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d = data as any
+  if (d['OS/2']) d['OS/2'].usWeightClass = master.wght
+
+  // Round-trip through TTFReader to get a fully-formed TTFObject (the JSON
+  // lacks some derived fields the writer expects; reading back a written
+  // TTF normalizes everything).
+  const raw = Buffer.from(new TTFWriter().write(d as TTFObject))
+  return { ttf: d as TTFObject, buf: raw }
+}
+
 // ---------------------------------------------------------------------------
 // Static OTF (CFF) for tools without variable font support. Built from the
-// Regular (default-axis) TTF.
+// Regular-master TTF by re-parsing through opentype.js. Q curves become
+// mathematically-equivalent C curves.
 // ---------------------------------------------------------------------------
 
 function buildOtfFromTtf(ttfBuf: Buffer): Buffer {
@@ -234,7 +233,7 @@ function buildOtfFromTtf(ttfBuf: Buffer): Buffer {
   for (let cp = 0x00A0; cp <= 0x00FF; cp++) candidate.push(cp)
   for (const cp of [0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026]) candidate.push(cp)
 
-  const byIndex = new Map<number, { name: string; unicodes: number[]; adv: number; path: opentype.Path }>()
+  const byIndex = new Map<number, { name: string, unicodes: number[], adv: number, path: opentype.Path }>()
   for (const cp of candidate) {
     const g = src.charToGlyph(String.fromCodePoint(cp))
     if (!g || g.index === 0) continue
@@ -291,76 +290,104 @@ function buildOtfFromTtf(ttfBuf: Buffer): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// Variable font merge (Python fontTools varLib via subprocess)
-// ---------------------------------------------------------------------------
-
-function buildVariableTtf(masterPaths: Array<{ wght: number; path: string }>, outPath: string) {
-  if (!existsSync(VENV_PY)) {
-    throw new Error(`fontTools venv missing at ${VENV_PY}. Run:\n  /opt/homebrew/bin/python3.13 -m venv .venv && .venv/bin/pip install fonttools`)
-  }
-  const args = [
-    VARLIB_PY,
-    '400', // default axis position
-    outPath,
-    ...masterPaths.map(m => `${m.wght}:${m.path}`),
-  ]
-  const r = spawnSync(VENV_PY, args, { encoding: 'utf8' })
-  if (r.status !== 0) {
-    throw new Error(`varLib build failed (${r.status}):\nstdout: ${r.stdout}\nstderr: ${r.stderr}`)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
 export async function buildNps2026() {
   const { data: base, patched, added } = await loadPatchedData()
 
-  await mkdir(TMP, { recursive: true })
-  const masterPaths: Array<{ name: string; wght: number; path: string; buf: Buffer }> = []
+  // Sniff the font's outer-contour winding from a representative single-
+  // contour glyph ('I'). Determines which perpendicular direction the
+  // offset routine uses so positive `offset` consistently adds ink.
+  const probe = base.glyf.find(g => g.name === 'I' && g.contours && g.contours.length === 1)
+    ?? base.glyf.find(g => g.contours && g.contours.length === 1)
+  const outerWinding = detectOuterWinding(probe?.contours)
+
+  // Build each static master in memory. The master's TTFObject is what
+  // buildVariableFont consumes; the byte buffer is for side outputs.
+  const masterData: Array<{ spec: MasterSpec, ttf: TTFObject, buf: Buffer }> = []
   for (const m of MASTERS) {
-    const buf = buildMasterTtf(base, m)
-    const path = resolve(TMP, `NPS_2026-${m.name}.ttf`)
-    await writeFile(path, buf)
-    masterPaths.push({ name: m.name, wght: m.wght, path, buf })
+    const { ttf, buf } = buildMasterTtf(base, m, outerWinding)
+    masterData.push({ spec: m, ttf, buf })
   }
+
+  // Merge into a variable font.
+  const variable: TTFObject = buildVariableFont({
+    axes: [{
+      tag: 'wght',
+      name: 'Weight',
+      minValue: 100,
+      defaultValue: 400,
+      maxValue: 900,
+    }],
+    masters: masterData.map<MasterInput>(m => ({
+      location: { wght: m.spec.wght },
+      font: m.ttf,
+    })),
+    instances: [
+      { name: 'Thin', location: { wght: 100 } },
+      { name: 'ExtraLight', location: { wght: 200 } },
+      { name: 'Light', location: { wght: 300 } },
+      { name: 'Regular', location: { wght: 400 } },
+      { name: 'Medium', location: { wght: 500 } },
+      { name: 'SemiBold', location: { wght: 600 } },
+      { name: 'Bold', location: { wght: 700 } },
+      { name: 'ExtraBold', location: { wght: 800 } },
+      { name: 'Black', location: { wght: 900 } },
+    ],
+  })
+
+  // Rebrand family name on the variable font (buildVariableFont copies the
+  // default master's name as-is; the subfamily should be "Regular" by
+  // convention for variable fonts).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  variable.name.fontFamily = FAMILY
+  variable.name.fontSubFamily = 'Regular'
+  variable.name.fullName = FAMILY
+  variable.name.postScriptName = POSTSCRIPT
+
+  const variableTtf = Buffer.from(new TTFWriter().write(variable))
+
+  // Static Regular (default master) for tools without VF support.
+  const regular = masterData.find(m => m.spec.name === 'Regular')!
+  const staticTtf = regular.buf
+  const staticOtf = buildOtfFromTtf(staticTtf)
 
   await mkdir(resolve(FONTS, 'otf'), { recursive: true })
   await mkdir(resolve(FONTS, 'ttf'), { recursive: true })
   await mkdir(resolve(FONTS, 'woff'), { recursive: true })
   await mkdir(resolve(FONTS, 'woff2'), { recursive: true })
 
-  // Static Regular (for tools without variable support)
-  const regular = masterPaths.find(m => m.name === 'Regular')!
-  await writeFile(resolve(FONTS, 'ttf', 'NPS_2026-Regular.ttf'), regular.buf)
-  const otf = buildOtfFromTtf(regular.buf)
-  await writeFile(resolve(FONTS, 'otf', 'NPS_2026-Regular.otf'), otf)
-  await writeFile(resolve(FONTS, 'woff', 'NPS_2026-Regular.woff'), sfntToWoff(regular.buf))
-  const regularWoff2 = Buffer.from(await wawoff2.compress(regular.buf))
-  await writeFile(resolve(FONTS, 'woff2', 'NPS_2026-Regular.woff2'), regularWoff2)
-
   // Variable
-  const vfPath = resolve(FONTS, 'ttf', 'NPS_2026[wght].ttf')
-  buildVariableTtf(masterPaths.map(m => ({ wght: m.wght, path: m.path })), vfPath)
-  const vfBuf = Buffer.from(await Bun.file(vfPath).arrayBuffer())
-  await writeFile(resolve(FONTS, 'woff', 'NPS_2026[wght].woff'), sfntToWoff(vfBuf))
-  const vfWoff2 = Buffer.from(await wawoff2.compress(vfBuf))
-  await writeFile(resolve(FONTS, 'woff2', 'NPS_2026[wght].woff2'), vfWoff2)
+  await writeFile(resolve(FONTS, 'ttf', 'NPS_2026[wght].ttf'), variableTtf)
+  await writeFile(resolve(FONTS, 'woff', 'NPS_2026[wght].woff'), sfntToWoff(variableTtf))
+  const variableWoff2 = Buffer.from(await wawoff2.compress(variableTtf))
+  await writeFile(resolve(FONTS, 'woff2', 'NPS_2026[wght].woff2'), variableWoff2)
 
-  // Clean up build scratch
-  await rm(TMP, { recursive: true, force: true })
+  // Static
+  await writeFile(resolve(FONTS, 'ttf', 'NPS_2026-Regular.ttf'), staticTtf)
+  await writeFile(resolve(FONTS, 'otf', 'NPS_2026-Regular.otf'), staticOtf)
+  await writeFile(resolve(FONTS, 'woff', 'NPS_2026-Regular.woff'), sfntToWoff(staticTtf))
+  const staticWoff2 = Buffer.from(await wawoff2.compress(staticTtf))
+  await writeFile(resolve(FONTS, 'woff2', 'NPS_2026-Regular.woff2'), staticWoff2)
 
   return {
     glyphCount: base.glyf.length,
     patched,
     added,
-    regularTtf: regular.buf,
-    variableTtf: vfBuf,
-    variableWoff2: vfWoff2,
-    regularWoff2,
-    otf,
+    variableTtf,
+    variableWoff2,
+    staticTtf,
+    staticOtf,
   }
+}
+
+/** Instantiate the variable font at a specific axis location as a static TTF. */
+export function instantiateVariable(variableTtfBuf: Buffer, coordinates: Record<string, number>): Buffer {
+  const ab = variableTtfBuf.buffer.slice(variableTtfBuf.byteOffset, variableTtfBuf.byteOffset + variableTtfBuf.byteLength)
+  const vf = new TTFReader().read(ab)
+  const inst = createInstance(vf, { coordinates, updateName: false })
+  return Buffer.from(new TTFWriter().write(inst))
 }
 
 async function run() {
@@ -372,8 +399,8 @@ async function run() {
   console.log(
     `✓ ${FAMILY}: ${r.glyphCount} glyphs · VF TTF ${(r.variableTtf.length / 1024).toFixed(1)}KB `
     + `· VF WOFF2 ${(r.variableWoff2.length / 1024).toFixed(1)}KB `
-    + `· Regular TTF ${(r.regularTtf.length / 1024).toFixed(1)}KB `
-    + `· OTF ${(r.otf.length / 1024).toFixed(1)}KB`
+    + `· Regular TTF ${(r.staticTtf.length / 1024).toFixed(1)}KB `
+    + `· OTF ${(r.staticOtf.length / 1024).toFixed(1)}KB`
     + (extras ? ` · ${extras}` : ''),
   )
 }
