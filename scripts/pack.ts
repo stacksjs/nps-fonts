@@ -5,6 +5,7 @@
  */
 
 import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ALL_FAMILIES, FAMILY_DISPLAY, type FamilyId } from './lib/common.ts'
 
@@ -29,22 +30,57 @@ async function copyDir(src: string, dst: string) {
   }
 }
 
+function hasVariable(id: FamilyId): boolean {
+  const meta = FAMILY_DISPLAY[id]
+  return existsSync(resolve(FONTS, id, 'ttf', `${meta.file}[wght].ttf`))
+}
+
 function buildCss(id: FamilyId): string {
   const meta = FAMILY_DISPLAY[id]
   const base = `${meta.file}-Regular`
-  return [
-    `/* ${meta.display} — original parametric font, drawn from scratch. */`,
-    '@font-face {',
-    `  font-family: "${meta.display}";`,
-    `  src: url("./fonts/woff2/${base}.woff2") format("woff2"),`,
-    `       url("./fonts/woff/${base}.woff") format("woff"),`,
-    `       url("./fonts/otf/${base}.otf") format("opentype");`,
-    `  font-weight: ${meta.weight};`,
-    `  font-style: ${meta.style};`,
-    '  font-display: swap;',
-    '}',
-    '',
-  ].join('\n')
+  const lines: string[] = [`/* ${meta.display} — ${meta.tagline} */`, '']
+
+  if (hasVariable(id)) {
+    lines.push(
+      '/* Variable — wght axis 100–900, preferred. */',
+      '@font-face {',
+      `  font-family: "${meta.display}";`,
+      `  src: url("./fonts/woff2/${meta.file}[wght].woff2") format("woff2-variations"),`,
+      `       url("./fonts/woff/${meta.file}[wght].woff") format("woff-variations"),`,
+      `       url("./fonts/ttf/${meta.file}[wght].ttf") format("truetype-variations");`,
+      '  font-weight: 100 900;',
+      `  font-style: ${meta.style};`,
+      '  font-display: swap;',
+      '}',
+      '',
+      '/* Static Regular — fallback for tools without variable-font support. */',
+      '@font-face {',
+      `  font-family: "${meta.display} Static";`,
+      `  src: url("./fonts/woff2/${base}.woff2") format("woff2"),`,
+      `       url("./fonts/woff/${base}.woff") format("woff"),`,
+      `       url("./fonts/otf/${base}.otf") format("opentype");`,
+      `  font-weight: ${meta.weight};`,
+      `  font-style: ${meta.style};`,
+      '  font-display: swap;',
+      '}',
+      '',
+    )
+  }
+  else {
+    lines.push(
+      '@font-face {',
+      `  font-family: "${meta.display}";`,
+      `  src: url("./fonts/woff2/${base}.woff2") format("woff2"),`,
+      `       url("./fonts/woff/${base}.woff") format("woff"),`,
+      `       url("./fonts/otf/${base}.otf") format("opentype");`,
+      `  font-weight: ${meta.weight};`,
+      `  font-style: ${meta.style};`,
+      '  font-display: swap;',
+      '}',
+      '',
+    )
+  }
+  return lines.join('\n')
 }
 
 function buildPkgJson(id: FamilyId): object {
@@ -101,12 +137,20 @@ Or via CDN:
 
 ## Files
 
-| Format | Path |
+${hasVariable(id) ? `| Format | Path | Notes |
+|---|---|---|
+| Variable TTF | \`fonts/ttf/${meta.file}[wght].ttf\` | wght axis 100–900 |
+| Variable WOFF2 | \`fonts/woff2/${meta.file}[wght].woff2\` | wght axis 100–900 |
+| Variable WOFF | \`fonts/woff/${meta.file}[wght].woff\` | wght axis 100–900 |
+| Static OTF    | \`fonts/otf/${meta.file}-Regular.otf\` | Regular only |
+| Static TTF    | \`fonts/ttf/${meta.file}-Regular.ttf\` | Regular only |
+| Static WOFF   | \`fonts/woff/${meta.file}-Regular.woff\` | Regular only |
+| Static WOFF2  | \`fonts/woff2/${meta.file}-Regular.woff2\` | Regular only |` : `| Format | Path |
 |---|---|
 | OTF    | \`fonts/otf/${meta.file}-Regular.otf\` |
 | TTF    | \`fonts/ttf/${meta.file}-Regular.ttf\` |
 | WOFF   | \`fonts/woff/${meta.file}-Regular.woff\` |
-| WOFF2  | \`fonts/woff2/${meta.file}-Regular.woff2\` |
+| WOFF2  | \`fonts/woff2/${meta.file}-Regular.woff2\` |`}
 
 ## Project
 

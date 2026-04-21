@@ -10,7 +10,7 @@ fonts" and refers to a stylistic tradition — public-lands signage,
 trailhead markers, and WPA-era park posters — not to any official
 typeface program.
 
-The four typefaces in this project — **Summitgrade 1935**, **Redwood
+The four typefaces in this project — **NPS 2026**, **Redwood
 Serif**, **Campmate Script**, and **NPS Symbols** — are original
 parametric works whose names and aesthetic choices are inspired by that
 tradition. They are not reproductions of, derivatives of, or substitutes

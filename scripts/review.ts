@@ -41,8 +41,8 @@ interface Sample {
 }
 
 const SAMPLES: Record<FamilyId, Sample[]> = {
-  'summitgrade-1935': [
-    { label: 'Hero', text: 'SUMMITGRADE 1935', size: 120 },
+  'nps-2026': [
+    { label: 'Hero', text: 'NPS 2026 1935', size: 120 },
     { label: 'Pangram', text: 'CRATER LAKE · EST 1902 · ELEV 7100 FT', size: 48 },
     { label: 'Caps', text: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', size: 42 },
     { label: 'Digits & punctuation', text: '0123456789 & — .,!?()/', size: 44 },

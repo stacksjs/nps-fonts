@@ -21,6 +21,16 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Python (fontTools for variable-font merge)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install fontTools into .venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet fonttools
+
       - name: Cache node_modules
         uses: actions/cache@v4
         with:
@@ -48,7 +58,7 @@ jobs:
       - name: Build family ZIPs
         run: |
           mkdir -p dist
-          for fam in summitgrade-1935 redwood-serif campmate-script nps-symbols; do
+          for fam in nps-2026 redwood-serif campmate-script nps-symbols; do
             cd fonts && zip -r "../dist/nps-fonts-${fam}-${{ steps.ver.outputs.version }}.zip" "$fam" && cd ..
           done
           cd fonts && zip -r "../dist/nps-fonts-all-${{ steps.ver.outputs.version }}.zip" . && cd ..

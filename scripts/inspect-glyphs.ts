@@ -1,7 +1,7 @@
 import opentype from 'opentype.js'
 
-const family = Bun.argv[2] ?? 'summitgrade-1935'
-const file = Bun.argv[3] ?? 'Summitgrade1935-Regular.otf'
+const family = Bun.argv[2] ?? 'nps-2026'
+const file = Bun.argv[3] ?? 'NPS_2026-Regular.otf'
 const text = Bun.argv[4] ?? '0123456789 — 14.7 MI'
 
 const buf = await Bun.file(`/Users/chrisbreuer/Code/nps-fonts/fonts/${family}/otf/${file}`).arrayBuffer()

@@ -24,7 +24,7 @@
     "*.css"
   ],
   "dependencies": {
-    "@nps-fonts/summitgrade-1935": "0.7.0",
+    "@nps-fonts/nps-2026": "0.7.0",
     "@nps-fonts/redwood-serif": "0.7.0",
     "@nps-fonts/campmate-script": "0.7.0",
     "@nps-fonts/nps-symbols": "0.7.0"

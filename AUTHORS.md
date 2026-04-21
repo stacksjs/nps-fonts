@@ -8,7 +8,7 @@ Fonts contributors.
 
 | Family             | Author(s)               |
 | ------------------ | ----------------------- |
-| Summitgrade 1935   | NPS Fonts contributors  |
+| NPS 2026   | NPS Fonts contributors  |
 | Redwood Serif      | NPS Fonts contributors  |
 | Campmate Script    | NPS Fonts contributors  |
 | NPS Symbols        | NPS Fonts contributors  |

@@ -94,7 +94,7 @@ function estimateBaselineRightEdge(p: opentype.Path): number {
 }
 
 // ---------------------------------------------------------------------------
-// Path primitives (verbatim from summitgrade-1935.ts, plus small helpers)
+// Path primitives (verbatim from nps-2026.ts, plus small helpers)
 // ---------------------------------------------------------------------------
 
 function rect(p: opentype.Path, x: number, y: number, w: number, h: number) {

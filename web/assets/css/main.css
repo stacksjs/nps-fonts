@@ -40,7 +40,7 @@ html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: "Summitgrade 1935", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "NPS 2026", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 400;
   font-feature-settings: "kern" 1, "liga" 1;
   line-height: 1.55;
@@ -68,7 +68,7 @@ main, header, footer { padding: 0 var(--pad); }
   display: flex; justify-content: space-between; align-items: baseline; gap: 32px;
 }
 .brand {
-  font-family: "Redwood Serif", "Summitgrade 1935", sans-serif;
+  font-family: "Redwood Serif", "NPS 2026", sans-serif;
   font-weight: 700;
   font-size: 22px;
   letter-spacing: 0.07em;
@@ -113,7 +113,7 @@ main, header, footer { padding: 0 var(--pad); }
 }
 .hero .pills {
   display: flex; gap: 10px; flex-wrap: wrap;
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -186,7 +186,7 @@ main, header, footer { padding: 0 var(--pad); }
 .family-waterfall .row:last-child { border-bottom: 0; }
 .family-waterfall .label {
   flex: 0 0 140px;
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -207,7 +207,7 @@ main, header, footer { padding: 0 var(--pad); }
   padding: 10px 18px;
   border: 1px solid var(--ink);
   border-radius: 2px;
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 13px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -237,7 +237,7 @@ main, header, footer { padding: 0 var(--pad); }
 .snippet .copy {
   position: absolute; top: 8px; right: 8px;
   background: var(--bg-alt); border: 1px solid var(--rule);
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
   padding: 4px 10px; border-radius: 2px;
   cursor: pointer; color: var(--ink-soft);
@@ -268,7 +268,7 @@ main, header, footer { padding: 0 var(--pad); }
   .pairing { grid-template-columns: 1fr 2fr; gap: 48px; }
 }
 .pairing .pair-meta {
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -293,7 +293,7 @@ main, header, footer { padding: 0 var(--pad); }
   margin: 0;
 }
 .pairing.script .pair-headline { font-family: "Campmate Script", cursive; text-transform: none; color: var(--moss); }
-.pairing.switchback .pair-headline { font-family: "Summitgrade 1935", sans-serif; }
+.pairing.switchback .pair-headline { font-family: "NPS 2026", sans-serif; }
 
 /* ----------------------------------------------------------------------- */
 /* Type tester                                                             */
@@ -371,7 +371,7 @@ main, header, footer { padding: 0 var(--pad); }
 .glyphs .cell::after {
   content: attr(data-cp);
   position: absolute; bottom: 2px; right: 4px;
-  font-family: "Summitgrade 1935", sans-serif;
+  font-family: "NPS 2026", sans-serif;
   font-size: 8px;
   color: var(--ink-soft);
 }

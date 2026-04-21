@@ -1,0 +1,35 @@
+{
+  "name": "@nps-fonts/nps-2026",
+  "version": "0.7.0",
+  "description": "NPS 2026 — 1930s NPS / WPA display face — art-deco geometry, variable weight 100–900. OFL-1.1. Unaffiliated with the U.S. National Park Service.",
+  "keywords": [
+    "font",
+    "typography",
+    "webfont",
+    "ofl",
+    "national-parks",
+    "nps-2026"
+  ],
+  "license": "OFL-1.1",
+  "homepage": "https://github.com/stacksjs/nps-fonts#nps-2026",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stacksjs/nps-fonts.git",
+    "directory": "packages/nps-2026"
+  },
+  "bugs": "https://github.com/stacksjs/nps-fonts/issues",
+  "main": "index.css",
+  "style": "index.css",
+  "files": [
+    "index.css",
+    "fonts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}

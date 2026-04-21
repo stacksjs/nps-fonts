@@ -1,0 +1,23 @@
+/* NPS 2026 — 1930s NPS / WPA display face — art-deco geometry, variable weight 100–900. */
+
+/* Variable — wght axis 100–900, preferred. */
+@font-face {
+  font-family: "NPS 2026";
+  src: url("./fonts/woff2/NPS_2026[wght].woff2") format("woff2-variations"),
+       url("./fonts/woff/NPS_2026[wght].woff") format("woff-variations"),
+       url("./fonts/ttf/NPS_2026[wght].ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Static Regular — fallback for tools without variable-font support. */
+@font-face {
+  font-family: "NPS 2026 Static";
+  src: url("./fonts/woff2/NPS_2026-Regular.woff2") format("woff2"),
+       url("./fonts/woff/NPS_2026-Regular.woff") format("woff"),
+       url("./fonts/otf/NPS_2026-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

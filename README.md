@@ -10,7 +10,7 @@ the SIL Open Font License 1.1.
 
 | Family               | Genre                                         | Reference inspiration                      |
 | -------------------- | --------------------------------------------- | ------------------------------------------ |
-| **Summitgrade 1935** | Vintage 1930s NPS display caps (all-caps)     | NPS 1935 routed-redwood signage            |
+| **NPS 2026** | Vintage 1930s NPS display caps (all-caps)     | NPS 1935 routed-redwood signage            |
 | **Redwood Serif**    | Old-style serif with stroke contrast          | Vicarel Studios *John Muir Serif*          |
 | **Campmate Script**  | Rounded upright script with ligatures         | Vicarel Studios *VS Outdoor Script*        |
 | **NPS Symbols**      | Pictograph icon font (23 glyphs)              | Original — NPS-themed icons                |
@@ -35,20 +35,20 @@ Download the family ZIP from the [latest release](https://github.com/stacksjs/np
 ### Web (CDN)
 
 ```html
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@nps-fonts/summitgrade-1935/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@nps-fonts/nps-2026/index.css">
 ```
 
 ### npm
 
 ```bash
-bun add @nps-fonts/summitgrade-1935
-# or: npm install @nps-fonts/summitgrade-1935
+bun add @nps-fonts/nps-2026
+# or: npm install @nps-fonts/nps-2026
 ```
 
 ```css
-@import "@nps-fonts/summitgrade-1935";
+@import "@nps-fonts/nps-2026";
 
-h1 { font-family: "Summitgrade 1935", system-ui, sans-serif; }
+h1 { font-family: "NPS 2026", system-ui, sans-serif; }
 ```
 
 ### Self-hosted `@font-face`
@@ -76,7 +76,7 @@ Requires [Bun](https://bun.sh) 1.1+.
 ```bash
 bun install
 bun run build                            # build all four families
-bun run build:family summitgrade-1935    # build a single family
+bun run build:family nps-2026    # build a single family
 bun run web                              # build the specimen site under web/dist
 bun run check                            # sanity-check built fonts
 bun test tests/                          # run smoke tests
@@ -93,7 +93,7 @@ nps-fonts/
 ├── packages/               # generated npm packages (one per family + meta)
 ├── scripts/
 │   ├── build.ts            # build orchestrator
-│   ├── summitgrade-1935.ts # drawing script — display caps
+│   ├── nps-2026.ts # drawing script — display caps
 │   ├── redwood-serif.ts    # drawing script — old-style serif
 │   ├── campmate-script.ts  # drawing script — rounded script w/ ligatures
 │   ├── symbols.ts          # drawing script — NPS Symbols pictographs
@@ -126,7 +126,7 @@ coverage. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 
-[SIL Open Font License 1.1](./OFL.txt). You may use, modify, and redistribute these fonts — including in commercial work — provided you retain the license. **Reserved Font Names**: *Summitgrade 1935*, *Redwood Serif*, *Campmate Script*, *NPS Symbols*.
+[SIL Open Font License 1.1](./OFL.txt). You may use, modify, and redistribute these fonts — including in commercial work — provided you retain the license. **Reserved Font Names**: *NPS 2026*, *Redwood Serif*, *Campmate Script*, *NPS Symbols*.
 
 ## Status
 

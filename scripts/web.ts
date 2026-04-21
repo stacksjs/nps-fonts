@@ -79,11 +79,11 @@ function pairings(): string {
   <h2>Pairings</h2>
   <div class="pairing">
     <div class="pair-meta">
-      Summitgrade 1935 over Redwood Serif
+      NPS 2026 over Redwood Serif
       <strong>Display + body</strong>
     </div>
     <div>
-      <h3 class="pair-headline" style="font-family: 'Summitgrade 1935';">CRATER LAKE</h3>
+      <h3 class="pair-headline" style="font-family: 'NPS 2026';">CRATER LAKE</h3>
       <p class="pair-body" style="font-family: 'Redwood Serif';">Established 1902. Deepest lake in the United States, formed when Mount Mazama collapsed roughly 7,700 years ago. The water is so pure it absorbs almost every wavelength but blue.</p>
     </div>
   </div>
@@ -186,7 +186,7 @@ function familyPageHtml(id: FamilyId): string {
   const extraStyle = id === 'campmate-script' ? "; font-feature-settings: 'liga' on" : ''
   const testerSample = id === 'nps-symbols'
     ? 'A M T F P C S L W * B H O D X'
-    : id === 'summitgrade-1935'
+    : id === 'nps-2026'
       ? `HALF DOME 8842 FT\n0123456789 NORTH RIM · 14.7 MI\nABCDEFGHIJKLMNOPQRSTUVWXYZ`
       : id === 'campmate-script'
         ? `Welcome to Crooked River Camp\ncoffee · hello · little kittens\nabcdefghijklmnopqrstuvwxyz`

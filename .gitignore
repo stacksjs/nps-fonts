@@ -19,33 +19,27 @@ sources/**/*.designspace.bak
 sources/**/master_ufo/
 sources/**/*.ttx
 sources/**/instance_ufo/
-
 # Node
 node_modules/
 .npm/
 *.tgz
 .bun/
 bun.lockb
-
 # OS
 .DS_Store
 Thumbs.db
 .AppleDouble
 .LSOverride
-
 # Editor
 .vscode/
 .idea/
 *.swp
 *.swo
-
 # Specimen render intermediates
 specimens/_tmp/
-
 # Web build
 web/dist/
 web/.cache/
 /pantry
-
 # Cached upstream OFL sources (re-downloadable)
 vendor/

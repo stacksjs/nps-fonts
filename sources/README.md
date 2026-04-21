@@ -7,7 +7,7 @@ references and proportions that the drawing scripts target.
 
 | Family               | Brief                                                         |
 | -------------------- | ------------------------------------------------------------- |
-| Summitgrade 1935     | [`summitgrade-1935/DESIGN.md`](./summitgrade-1935/DESIGN.md)  |
+| NPS 2026     | [`nps-2026/DESIGN.md`](./nps-2026/DESIGN.md)  |
 | Redwood Serif        | [`redwood-serif/DESIGN.md`](./redwood-serif/DESIGN.md)        |
 | Campmate Script      | [`campmate-script/DESIGN.md`](./campmate-script/DESIGN.md)    |
 

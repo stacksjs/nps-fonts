@@ -5,7 +5,7 @@
  *
  *   bun run scripts/build.ts                       # all families
  *   bun run scripts/build.ts --all
- *   bun run scripts/build.ts --family summitgrade-1935
+ *   bun run scripts/build.ts --family nps-2026
  */
 
 import { ALL_FAMILIES, type FamilyId } from './lib/common.ts'
@@ -23,7 +23,7 @@ const families = wantsAll
 
 const SCRIPT: Record<FamilyId, string> = {
   'nps-symbols': './symbols.ts',
-  'summitgrade-1935': './summitgrade-1935.ts',
+  'nps-2026': './nps-2026.ts',
   'redwood-serif': './redwood-serif.ts',
   'campmate-script': './campmate-script.ts',
 }

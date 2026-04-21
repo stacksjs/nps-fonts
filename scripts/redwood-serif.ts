@@ -8,7 +8,7 @@
  * Art Deco, not geometric.
  *
  * Primitives (rect / ellipse / legStroke / halfRing / slabSerif) are
- * shared with Summitgrade 1935 so every glyph is a simple union of
+ * shared with NPS 2026 so every glyph is a simple union of
  * closed sub-paths. No concave sweep brackets — the fillet is just a
  * small rect at each stem/slab join.
  *
@@ -58,7 +58,7 @@ const A_BAR_Y = CAP * 0.32
 const E_BAR_Y = CAP * 0.48
 
 // ---------------------------------------------------------------------------
-// Primitives — shared with Summitgrade 1935
+// Primitives — shared with NPS 2026
 // ---------------------------------------------------------------------------
 
 function rect(p: opentype.Path, x: number, y: number, w: number, h: number) {

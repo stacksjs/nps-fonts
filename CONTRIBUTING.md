@@ -14,7 +14,7 @@ language coverage, to building tooling. Welcome.
    updating `FONTLOG.txt`, `AUTHORS.md`, and the in-font copyright string
    per the OFL terms.
 3. **Reserved Font Names.** Modified versions distributed under a
-   different name must not use *Summitgrade 1935*, *Redwood Serif*,
+   different name must not use *NPS 2026*, *Redwood Serif*,
    *Campmate Script*, or *NPS Symbols* as primary font names —
    that is a Reserved Font Name protection under the OFL.
 

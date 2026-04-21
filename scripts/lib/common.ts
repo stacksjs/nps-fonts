@@ -157,7 +157,7 @@ export const CHARSET_BY_CP: Map<number, CharsetEntry> = new Map(
 )
 
 export const ALL_FAMILIES = [
-  'summitgrade-1935',
+  'nps-2026',
   'redwood-serif',
   'campmate-script',
   'nps-symbols',
@@ -183,11 +183,11 @@ export interface FamilyMeta {
 }
 
 export const FAMILY_DISPLAY: Record<FamilyId, FamilyMeta> = {
-  'summitgrade-1935': {
-    display: 'Summitgrade 1935',
-    file: 'Summitgrade1935',
-    tagline: 'Vintage 1930s NPS display caps — routed-redwood, CCC-era.',
-    hero: 'SUMMITGRADE',
+  'nps-2026': {
+    display: 'NPS 2026',
+    file: 'NPS_2026',
+    tagline: '1930s NPS / WPA display face — art-deco geometry, variable weight 100–900.',
+    hero: 'NPS 2026',
     pangram: 'CRATER LAKE · EST 1902 · ELEV 7100 FT',
     weight: 400,
     style: 'normal',
@@ -222,7 +222,7 @@ export const FAMILY_DISPLAY: Record<FamilyId, FamilyMeta> = {
 }
 
 const PARAMETRIC_SET: ReadonlySet<FamilyId> = new Set<FamilyId>([
-  'summitgrade-1935',
+  'nps-2026',
   'redwood-serif',
   'campmate-script',
   'nps-symbols',

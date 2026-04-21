@@ -21,7 +21,7 @@ CHANGELOG
 20 Apr 2026 (NPS Fonts contributors) — v0.7.0 — original parametric release
 - REMOVED all OFL-forked families (Wayfinder Sans, Wayfinder Serif,
   Campfire Script, Switchback, Cairn, Routemark Sans, Trailmark Script).
-- ADDED Summitgrade 1935 (display caps, all-caps, routed-redwood NPS
+- ADDED NPS 2026 (display caps, all-caps, routed-redwood NPS
   1935-era signage aesthetic). 51 glyphs.
 - ADDED Redwood Serif (old-style / transitional serif with stroke
   contrast and bracketed serifs, both cases). 77 glyphs.
@@ -47,7 +47,7 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
 https://openfontlicense.org
 
-Reserved Font Names: "Summitgrade 1935", "Redwood Serif",
+Reserved Font Names: "NPS 2026", "Redwood Serif",
 "Campmate Script", "NPS Symbols".
 
 

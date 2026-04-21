@@ -4,7 +4,7 @@
  * loop while iterating on glyph drawings: build → render → view → revise.
  *
  *   bun run scripts/render.ts                              # all families, default specimens
- *   bun run scripts/render.ts --family summitgrade-1935    # single family
+ *   bun run scripts/render.ts --family nps-2026    # single family
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -58,8 +58,8 @@ interface Specimen {
 }
 
 const SPECIMEN_SETS: Record<FamilyId, Specimen[]> = {
-  'summitgrade-1935': [
-    { label: 'hero', text: 'SUMMITGRADE', fontSize: 200 },
+  'nps-2026': [
+    { label: 'hero', text: 'NPS 2026', fontSize: 200 },
     { label: 'pangram', text: 'CRATER LAKE EST 1902', fontSize: 140 },
     { label: 'caps', text: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', fontSize: 90 },
     { label: 'digits', text: '0123456789 — 14.7 MI', fontSize: 110 },
