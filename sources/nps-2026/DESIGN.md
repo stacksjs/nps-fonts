@@ -47,9 +47,18 @@ Current offset amounts are in `scripts/nps-2026.ts`:
 
 | Master   | `wght` | Offset (em) |
 | -------- | ------ | ----------- |
-| Thin     | 100    | −70         |
+| Thin     | 100    | −35         |
 | Regular  | 400    | 0           |
 | Black    | 900    | +55         |
+
+The Thin offset is asymmetric with Black: the source has narrow
+features (S curves, digit strokes) that fragment beyond roughly ±45 em
+of inward offset. Black has more headroom because the failure mode on
+the heavy end is counter-closure rather than curve collapse.
+
+The contour offsetter in `scripts/lib/offset.ts` caps miter
+amplification at 2× (CSS default) so sharp corners can't multiply the
+nominal offset and break otherwise-clean curves.
 
 ## Build
 

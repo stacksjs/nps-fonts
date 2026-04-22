@@ -60,7 +60,11 @@ export function offsetContour(contour: Contour, d: number, outerWinding: OuterWi
   const outNormal = (dx: number, dy: number): [number, number] =>
     outerWinding === 'ccw' ? normalize(dy, -dx) : normalize(-dy, dx)
 
-  const MITER_LIMIT = 8 // clamp sharp corners to avoid blow-ups
+  // Miter-amplification cap at sharp corners. A value of 8 (SVG default)
+  // lets narrow spike/V corners overshoot by 8× the nominal offset, which
+  // fragments glyphs with tight curves (S, 2, R leg). 2 matches CSS's
+  // default miter-limit and is empirically safe for display-face curves.
+  const MITER_LIMIT = 2
 
   const out: Contour = []
   for (let i = 0; i < n; i++) {

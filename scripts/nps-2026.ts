@@ -48,8 +48,12 @@ const VERSION = 'Version 1.000'
  * applied to the pristine Regular outlines (Regular = 0). `wght` is both
  * the `wght` axis location and each master's OS/2 usWeightClass.
  */
+// Offsets chosen empirically: the source has some narrow features (S
+// curves, R leg, digit strokes) that fragment when offset magnitude
+// exceeds ~45 em. Keep Thin conservative; Black can push further without
+// issue because the failure mode is counter-closure, not curve collapse.
 const MASTERS = [
-  { name: 'Thin', wght: 100, offset: -70 },
+  { name: 'Thin', wght: 100, offset: -35 },
   { name: 'Regular', wght: 400, offset: 0 },
   { name: 'Black', wght: 900, offset: 55 },
 ] as const
