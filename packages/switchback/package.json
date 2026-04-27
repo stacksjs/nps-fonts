@@ -11,13 +11,13 @@
     "switchback"
   ],
   "license": "OFL-1.1",
-  "homepage": "https://github.com/stacksjs/nps-fonts#switchback",
+  "homepage": "https://github.com/national-park-service/fonts#switchback",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stacksjs/nps-fonts.git",
+    "url": "git+https://github.com/national-park-service/fonts.git",
     "directory": "packages/switchback"
   },
-  "bugs": "https://github.com/stacksjs/nps-fonts/issues",
+  "bugs": "https://github.com/national-park-service/fonts/issues",
   "main": "index.css",
   "style": "index.css",
   "files": [

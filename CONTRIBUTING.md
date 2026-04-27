@@ -21,7 +21,7 @@ language coverage, to building tooling. Welcome.
 ## Getting set up
 
 ```bash
-git clone https://github.com/stacksjs/nps-fonts.git
+git clone https://github.com/national-park-service/fonts.git
 cd nps-fonts
 bun install
 bun run build       # builds all families, all formats

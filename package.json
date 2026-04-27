@@ -4,13 +4,13 @@
   "private": true,
   "description": "Original open-source typefaces inspired by U.S. National Park Service signage — drawn from scratch",
   "license": "OFL-1.1",
-  "homepage": "https://github.com/stacksjs/nps-fonts",
+  "homepage": "https://github.com/national-park-service/fonts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/stacksjs/nps-fonts.git"
+    "url": "https://github.com/national-park-service/fonts.git"
   },
   "bugs": {
-    "url": "https://github.com/stacksjs/nps-fonts/issues"
+    "url": "https://github.com/national-park-service/fonts/issues"
   },
   "type": "module",
   "workspaces": [

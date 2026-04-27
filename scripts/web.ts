@@ -285,7 +285,7 @@ async function indexHtml(): Promise<string> {
       <span class="brand">NPS Fonts<span class="dot">.</span></span>
       <nav class="nav">
         ${nav}
-        <a href="https://github.com/stacksjs/nps-fonts">GitHub</a>
+        <a href="https://github.com/national-park-service/fonts">GitHub</a>
       </nav>
     </div>
   </header>
@@ -324,10 +324,10 @@ async function indexHtml(): Promise<string> {
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="https://github.com/stacksjs/nps-fonts">Repository</a></li>
-          <li><a href="https://github.com/stacksjs/nps-fonts/issues">Issues</a></li>
-          <li><a href="https://github.com/stacksjs/nps-fonts/blob/main/CONTRIBUTING.md">Contributing</a></li>
-          <li><a href="https://github.com/stacksjs/nps-fonts/blob/main/OFL.txt">License (OFL)</a></li>
+          <li><a href="https://github.com/national-park-service/fonts">Repository</a></li>
+          <li><a href="https://github.com/national-park-service/fonts/issues">Issues</a></li>
+          <li><a href="https://github.com/national-park-service/fonts/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/national-park-service/fonts/blob/main/OFL.txt">License (OFL)</a></li>
         </ul>
       </div>
       <div>
@@ -335,7 +335,7 @@ async function indexHtml(): Promise<string> {
         <ul>
           <li><a href="https://www.npmjs.com/package/@nps-fonts/all">npm</a></li>
           <li><a href="https://www.jsdelivr.com/package/npm/@nps-fonts/all">jsDelivr</a></li>
-          <li><a href="https://github.com/stacksjs/nps-fonts/releases">Release ZIPs</a></li>
+          <li><a href="https://github.com/national-park-service/fonts/releases">Release ZIPs</a></li>
         </ul>
       </div>
     </div>
@@ -428,7 +428,7 @@ async function familyPageHtml(id: FamilyId): Promise<string> {
   <header class="site-header">
     <div class="wrap">
       <a href="../" class="brand">NPS Fonts<span class="dot">.</span></a>
-      <nav class="nav"><a href="../">All families</a> <a href="https://github.com/stacksjs/nps-fonts">GitHub</a></nav>
+      <nav class="nav"><a href="../">All families</a> <a href="https://github.com/national-park-service/fonts">GitHub</a></nav>
     </div>
   </header>
   <main class="wrap">
@@ -463,7 +463,7 @@ font-family: "${meta.display}";</pre>
   <footer class="site-footer">
     <div class="wrap">
       <div><h4>NPS Fonts</h4><p>© 2026 contributors · OFL-1.1</p></div>
-      <div><h4>Project</h4><ul><li><a href="https://github.com/stacksjs/nps-fonts">Repository</a></li><li><a href="../">All families</a></li></ul></div>
+      <div><h4>Project</h4><ul><li><a href="https://github.com/national-park-service/fonts">Repository</a></li><li><a href="../">All families</a></li></ul></div>
       <div></div>
     </div>
   </footer>

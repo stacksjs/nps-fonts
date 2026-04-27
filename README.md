@@ -151,7 +151,7 @@ bun add @nps-fonts/nps-symbols @nps-fonts/sequoia-sans @nps-fonts/switchback
 ### Desktop
 
 Download family ZIPs from the
-[latest release](https://github.com/stacksjs/nps-fonts/releases).
+[latest release](https://github.com/national-park-service/fonts/releases).
 
 ## Build from source
 

@@ -99,13 +99,13 @@ function buildPkgJson(id: FamilyId): object {
     description: `${meta.display} — ${meta.tagline} OFL-1.1. Unaffiliated with the U.S. National Park Service.`,
     keywords: ['font', 'typography', 'webfont', 'ofl', 'national-parks', id],
     license: 'OFL-1.1',
-    homepage: `https://github.com/stacksjs/nps-fonts#${id}`,
+    homepage: `https://github.com/national-park-service/fonts#${id}`,
     repository: {
       type: 'git',
-      url: 'git+https://github.com/stacksjs/nps-fonts.git',
+      url: 'git+https://github.com/national-park-service/fonts.git',
       directory: `packages/${id}`,
     },
-    bugs: 'https://github.com/stacksjs/nps-fonts/issues',
+    bugs: 'https://github.com/national-park-service/fonts/issues',
     main: 'index.css',
     style: 'index.css',
     files: ['index.css', 'fonts/', 'README.md', 'LICENSE'],
@@ -163,7 +163,7 @@ ${hasVariable(id) ? `| Format | Path | Notes |
 ## Project
 
 Source, specimens, and the full family suite:
-<https://github.com/stacksjs/nps-fonts>
+<https://github.com/national-park-service/fonts>
 `
 }
 
@@ -192,13 +192,13 @@ async function buildMetaPackage() {
     version: VERSION,
     description: `NPS Fonts meta-package — installs all ${ALL_FAMILIES.length} families.`,
     license: 'OFL-1.1',
-    homepage: 'https://github.com/stacksjs/nps-fonts',
+    homepage: 'https://github.com/national-park-service/fonts',
     repository: {
       type: 'git',
-      url: 'git+https://github.com/stacksjs/nps-fonts.git',
+      url: 'git+https://github.com/national-park-service/fonts.git',
       directory: 'packages/all',
     },
-    bugs: 'https://github.com/stacksjs/nps-fonts/issues',
+    bugs: 'https://github.com/national-park-service/fonts/issues',
     main: 'index.css',
     style: 'index.css',
     files: ['index.css', 'README.md', 'LICENSE'],
@@ -226,7 +226,7 @@ bun add @nps-fonts/all
 @import "@nps-fonts/all";
 \`\`\`
 
-See <https://github.com/stacksjs/nps-fonts> for individual families and specimens.
+See <https://github.com/national-park-service/fonts> for individual families and specimens.
 `,
   )
   await copyFile(resolve(ROOT, 'OFL.txt'), resolve(dir, 'LICENSE'))

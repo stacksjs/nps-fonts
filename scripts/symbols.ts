@@ -946,7 +946,7 @@ async function build() {
     copyright: 'Copyright (c) 2026, NPS Fonts contributors. With Reserved Font Name "NPS Symbols".',
     description: 'NPS Symbols — National Park Service-inspired pictograph font. Drawn from scratch.',
     designer: 'NPS Fonts contributors',
-    designerURL: 'https://github.com/stacksjs/nps-fonts',
+    designerURL: 'https://github.com/national-park-service/fonts',
     manufacturer: 'NPS Fonts',
     license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
     licenseURL: 'https://openfontlicense.org',

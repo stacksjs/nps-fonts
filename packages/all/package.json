@@ -3,13 +3,13 @@
   "version": "0.7.0",
   "description": "NPS Fonts meta-package — installs all 6 families.",
   "license": "OFL-1.1",
-  "homepage": "https://github.com/stacksjs/nps-fonts",
+  "homepage": "https://github.com/national-park-service/fonts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stacksjs/nps-fonts.git",
+    "url": "git+https://github.com/national-park-service/fonts.git",
     "directory": "packages/all"
   },
-  "bugs": "https://github.com/stacksjs/nps-fonts/issues",
+  "bugs": "https://github.com/national-park-service/fonts/issues",
   "main": "index.css",
   "style": "index.css",
   "files": [

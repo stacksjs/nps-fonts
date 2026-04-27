@@ -11,13 +11,13 @@
     "sequoia-sans"
   ],
   "license": "OFL-1.1",
-  "homepage": "https://github.com/stacksjs/nps-fonts#sequoia-sans",
+  "homepage": "https://github.com/national-park-service/fonts#sequoia-sans",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stacksjs/nps-fonts.git",
+    "url": "git+https://github.com/national-park-service/fonts.git",
     "directory": "packages/sequoia-sans"
   },
-  "bugs": "https://github.com/stacksjs/nps-fonts/issues",
+  "bugs": "https://github.com/national-park-service/fonts/issues",
   "main": "index.css",
   "style": "index.css",
   "files": [

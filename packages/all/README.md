@@ -10,4 +10,4 @@ bun add @nps-fonts/all
 @import "@nps-fonts/all";
 ```
 
-See <https://github.com/stacksjs/nps-fonts> for individual families and specimens.
+See <https://github.com/national-park-service/fonts> for individual families and specimens.

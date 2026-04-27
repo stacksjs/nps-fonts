@@ -37,4 +37,4 @@ Or via CDN:
 ## Project
 
 Source, specimens, and the full family suite:
-<https://github.com/stacksjs/nps-fonts>
+<https://github.com/national-park-service/fonts>
