@@ -216,7 +216,7 @@ nps-fonts/
 ## How the families are built
 
 The fonts are built in pure TypeScript via
-[`ts-font-editor`](https://github.com/stacksjs/ts-font-editor) and
+[`ts-fonts`](https://github.com/stacksjs/ts-fonts) and
 [`opentype.js`](https://github.com/opentypejs/opentype.js) — no Python
 toolchain required.
 
@@ -233,7 +233,7 @@ the exception — its 23 pictographs are drawn parametrically in
 **NPS 2026** additionally derives Thin (wght 100) and Black (wght 900)
 masters from the Regular outlines via point-compatible contour
 offsetting (`scripts/lib/offset.ts`), then merges all three into a
-variable font with `buildVariableFont` from `ts-font-editor`. The
+variable font with `buildVariableFont` from `ts-fonts`. The
 `bun run verify` script per-pixel-diffs every covered codepoint against
 the source `outlines.json` to catch regressions.
 

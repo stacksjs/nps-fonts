@@ -68,17 +68,17 @@ Source files:
   full contour replacement, and new-glyph additions.
 - [`scripts/nps-2026.ts`](../../scripts/nps-2026.ts) — the build: load
   outlines → apply patches → derive Thin/Black masters via contour
-  offsetting → merge with `buildVariableFont` (from `ts-font-editor`) →
+  offsetting → merge with `buildVariableFont` (from `ts-fonts`) →
   emit VF TTF/WOFF/WOFF2 and static Regular OTF/TTF/WOFF/WOFF2.
 - [`scripts/lib/offset.ts`](../../scripts/lib/offset.ts) — point-compatible
   contour offset with miter-bisector corner handling and auto-detected
   outer-winding convention.
 
-## ts-font-editor
+## ts-fonts
 
 Variable-font merging, TTF reading/writing, and static instance
 generation are all provided by
-[`ts-font-editor`](https://github.com/stacksjs/ts-font-editor) —
+[`ts-fonts`](https://github.com/stacksjs/ts-fonts) —
 `bun link`-ed during development. Replaces the previous
 `fonteditor-core` (JS) + `fontTools` (Python) combo with a single
 TypeScript dependency.

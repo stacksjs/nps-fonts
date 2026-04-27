@@ -1,4 +1,4 @@
-import opentype from 'opentype.js'
+import { parse } from 'ts-fonts'
 import { resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -8,11 +8,12 @@ const file = Bun.argv[3] ?? 'NPS_2026-Regular.otf'
 const text = Bun.argv[4] ?? '0123456789 — 14.7 MI'
 
 const buf = await Bun.file(resolve(ROOT, 'fonts', family, 'otf', file)).arrayBuffer()
-const f = opentype.parse(buf)
+const f = parse(buf)
 
 for (const c of [...text]) {
   const g = f.charToGlyph(c)
-  const bb = g.path.getBoundingBox()
+  const path = g.getPath(0, 0, (f as unknown as { unitsPerEm: number }).unitsPerEm ?? 1000)
+  const bb = path.getBoundingBox()
   const pathW = (bb.x2 - bb.x1).toFixed(0)
   const adv = g.advanceWidth ?? 0
   const overhang = (bb.x2 - adv).toFixed(0)

@@ -4,7 +4,7 @@
  *
  * Outlines live in `sources/nps-2026/outlines.json`.
  *
- * Build pipeline (all pure TypeScript via `ts-font-editor` — no Python):
+ * Build pipeline (all pure TypeScript via `ts-fonts` — no Python):
  *   1. Load outlines.
  *   2. Apply `PATCHES` / `ADDITIONS`.
  *   3. Derive Thin/Black masters via point-compatible contour offsetting.
@@ -14,22 +14,21 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import opentype from 'opentype.js'
 import {
   buildVariableFont,
   createInstance,
+  encodeWOFF2Native,
+  OTFWriter,
   TTFReader,
   TTFWriter,
   type MasterInput,
   type TTFObject,
-} from 'ts-font-editor'
+} from 'ts-fonts'
 import { sfntToWoff } from './lib/woff.ts'
 import { detectOuterWinding, offsetContour, recomputeBounds as recomputeOffsetBounds, type OuterWinding } from './lib/offset.ts'
 import { PIPELINES } from './lib/transforms.ts'
 import type { Contour, GlyphAddition, GlyphPatch, Point } from '../sources/nps-2026/patches.ts'
 import { ADDITIONS, PATCHES } from '../sources/nps-2026/patches.ts'
-
-const wawoff2 = await import('wawoff2')
 
 const ROOT = resolve(import.meta.dir, '..')
 const FONTS = resolve(ROOT, 'fonts', 'nps-2026')
@@ -194,101 +193,73 @@ function buildMasterTtf(base: FontData, master: MasterSpec, outerWinding: OuterW
 }
 
 // ---------------------------------------------------------------------------
-// Static OTF (CFF) for tools without variable font support. Built from the
-// Regular-master TTF by re-parsing through opentype.js. Q curves become
-// mathematically-equivalent C curves.
+// Static OTF (CFF) for tools without variable font support. Subsets the
+// Regular master to common Latin codepoints and emits a Type 2 / CFF .otf
+// via ts-fonts' OTFWriter. Quadratic TT outlines are converted to cubic
+// charstrings inside the writer.
 // ---------------------------------------------------------------------------
 
 function buildOtfFromTtf(ttfBuf: Buffer): Buffer {
-  const ab = ttfBuf.buffer.slice(ttfBuf.byteOffset, ttfBuf.byteOffset + ttfBuf.byteLength)
-  const src = opentype.parse(ab)
+  const ab = ttfBuf.buffer.slice(ttfBuf.byteOffset, ttfBuf.byteOffset + ttfBuf.byteLength) as ArrayBuffer
+  const src = new TTFReader().read(ab)
 
-  interface PathCommand {
-    type: 'M' | 'L' | 'C' | 'Q' | 'Z'
-    x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number
-  }
-
-  const clonePath = (p: opentype.Path): opentype.Path => {
-    const out = new opentype.Path()
-    for (const c of p.commands as unknown as PathCommand[]) {
-      switch (c.type) {
-        case 'M': out.moveTo(c.x!, c.y!); break
-        case 'L': out.lineTo(c.x!, c.y!); break
-        case 'Q': out.quadraticCurveTo(c.x1!, c.y1!, c.x!, c.y!); break
-        case 'C': out.curveTo(c.x1!, c.y1!, c.x2!, c.y2!, c.x!, c.y!); break
-        case 'Z': out.close(); break
-      }
-    }
-    return out
-  }
-
-  const notdef = new opentype.Glyph({
-    name: '.notdef',
-    unicode: 0,
-    advanceWidth: src.glyphs.get(0).advanceWidth ?? 600,
-    path: new opentype.Path(),
-  })
-  const glyphs: opentype.Glyph[] = [notdef]
-  const seen = new Set<number>([0])
+  // Codepoints we want covered in the OTF (Latin-1 + common typographic punctuation).
   const candidate: number[] = []
   for (let cp = 0x0020; cp <= 0x007E; cp++) candidate.push(cp)
   for (let cp = 0x00A0; cp <= 0x00FF; cp++) candidate.push(cp)
   for (const cp of [0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026]) candidate.push(cp)
 
-  const byIndex = new Map<number, { name: string, unicodes: number[], adv: number, path: opentype.Path }>()
+  // Walk the TTFObject's cmap to gather the unique glyph indices required.
+  const wantedGids = new Set<number>([0]) // .notdef
+  const cmap = (src.cmap ?? {}) as Record<number, number>
   for (const cp of candidate) {
-    const g = src.charToGlyph(String.fromCodePoint(cp))
-    if (!g || g.index === 0) continue
-    if (seen.has(g.index)) {
-      const e = byIndex.get(g.index)
-      if (e && !e.unicodes.includes(cp)) e.unicodes.push(cp)
-      continue
-    }
-    seen.add(g.index)
-    byIndex.set(g.index, {
-      name: g.name ?? `glyph${g.index}`,
-      unicodes: [cp],
-      adv: g.advanceWidth ?? 0,
-      path: clonePath(g.path),
-    })
+    const gid = cmap[cp]
+    if (typeof gid === 'number' && gid !== 0) wantedGids.add(gid)
   }
 
-  for (const t of byIndex.values()) {
-    const g = new opentype.Glyph({
-      name: t.name,
-      unicode: t.unicodes[0]!,
-      advanceWidth: t.adv,
-      path: t.path,
-    })
-    if (t.unicodes.length > 1) {
-      ;(g as opentype.Glyph & { unicodes: number[] }).unicodes = [...t.unicodes]
+  // Build a parallel glyph list, preserving original indices so the cmap
+  // remapping below stays consistent. Glyphs not in `wantedGids` are kept
+  // as empty (advance-only) entries — small footprint, no contour bytes.
+  const newGlyphs: typeof src.glyf = []
+  const newCmap: Record<number, number> = {}
+  for (let oldIdx = 0; oldIdx < src.glyf.length; oldIdx++) {
+    const g = src.glyf[oldIdx]!
+    if (wantedGids.has(oldIdx)) {
+      newGlyphs.push(g)
     }
-    glyphs.push(g)
+    else {
+      newGlyphs.push({
+        ...g,
+        contours: [],
+        unicode: undefined as never,
+      })
+    }
+  }
+  for (const cp of Object.keys(cmap)) {
+    const cpNum = Number(cp)
+    const gid = cmap[cpNum]!
+    if (wantedGids.has(gid)) newCmap[cpNum] = gid
   }
 
-  const font = new opentype.Font({
-    familyName: FAMILY,
-    styleName: 'Regular',
-    unitsPerEm: src.unitsPerEm,
-    ascender: src.ascender,
-    descender: src.descender,
-    designer: 'NPS Fonts contributors',
-    designerURL: 'https://github.com/stacksjs/nps-fonts',
-    manufacturer: 'NPS Fonts contributors',
-    license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
-    licenseURL: 'https://openfontlicense.org',
-    version: VERSION,
-    description: DESCRIPTION,
-    copyright: COPYRIGHT,
-    trademark: '',
-    glyphs,
-  })
-  if (font.tables.os2) {
-    font.tables.os2.usWeightClass = 400
-    font.tables.os2.achVendID = 'NPSF'
-    font.tables.os2.fsSelection = 0xC0
+  const subsetted: TTFObject = {
+    ...src,
+    glyf: newGlyphs,
+    cmap: newCmap as never,
+    // Reset the name table so OTFWriter sources branding from our values.
+    name: {
+      ...src.name,
+      fontFamily: FAMILY,
+      fontSubFamily: 'Regular',
+      fullName: FAMILY,
+      postScriptName: `${POSTSCRIPT}-Regular`,
+      version: VERSION,
+      copyright: COPYRIGHT,
+      description: DESCRIPTION,
+      manufacturer: 'NPS Fonts contributors',
+      designer: 'NPS Fonts contributors',
+    },
   }
-  return Buffer.from(font.toArrayBuffer() as ArrayBuffer)
+  return Buffer.from(new OTFWriter({ fontName: `${POSTSCRIPT}-Regular` }).write(subsetted))
 }
 
 // ---------------------------------------------------------------------------
@@ -367,16 +338,19 @@ export async function buildNps2026() {
   await mkdir(resolve(FONTS, 'woff2'), { recursive: true })
 
   // Variable
+  const variableTtfAb = variableTtf.buffer.slice(variableTtf.byteOffset, variableTtf.byteOffset + variableTtf.byteLength) as ArrayBuffer
+  const staticTtfAb = staticTtf.buffer.slice(staticTtf.byteOffset, staticTtf.byteOffset + staticTtf.byteLength) as ArrayBuffer
+
   await writeFile(resolve(FONTS, 'ttf', 'NPS_2026[wght].ttf'), variableTtf)
   await writeFile(resolve(FONTS, 'woff', 'NPS_2026[wght].woff'), sfntToWoff(variableTtf))
-  const variableWoff2 = Buffer.from(await wawoff2.compress(variableTtf))
+  const variableWoff2 = Buffer.from(await encodeWOFF2Native(variableTtfAb))
   await writeFile(resolve(FONTS, 'woff2', 'NPS_2026[wght].woff2'), variableWoff2)
 
   // Static
   await writeFile(resolve(FONTS, 'ttf', 'NPS_2026-Regular.ttf'), staticTtf)
   await writeFile(resolve(FONTS, 'otf', 'NPS_2026-Regular.otf'), staticOtf)
   await writeFile(resolve(FONTS, 'woff', 'NPS_2026-Regular.woff'), sfntToWoff(staticTtf))
-  const staticWoff2 = Buffer.from(await wawoff2.compress(staticTtf))
+  const staticWoff2 = Buffer.from(await encodeWOFF2Native(staticTtfAb))
   await writeFile(resolve(FONTS, 'woff2', 'NPS_2026-Regular.woff2'), staticWoff2)
 
   return {

@@ -2,7 +2,7 @@
  * Shared infrastructure for families built from `_extract-source.ts`
  * snapshots (sources/<family>/outlines*.json). Handles loading,
  * float→int rounding, name-table branding, and the OTF/TTF/WOFF/WOFF2
- * write side via opentype.js and ts-font-editor.
+ * write side — all via `ts-fonts` (no opentype.js, no wawoff2 dep).
  *
  * Each family script:
  *   1. Loads one or more outlines.json files via `loadOutlines`.
@@ -13,11 +13,8 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import opentype from 'opentype.js'
-import { TTFWriter, type TTFObject } from 'ts-font-editor'
+import { encodeWOFF2Native, OTFWriter, TTFReader, TTFWriter, type TTFObject } from 'ts-fonts'
 import { sfntToWoff } from './woff.ts'
-
-const wawoff2 = await import('wawoff2')
 
 const ROOT = resolve(import.meta.dir, '..', '..')
 
@@ -186,86 +183,27 @@ export function brandNameTable(data: FontData, b: BrandingInput): void {
 }
 
 /**
- * Build an OTF (CFF) buffer from a TTFObject by re-parsing through
- * opentype.js. This re-emits glyph paths as CFF charstrings (cubic),
- * which is what tools without TT-only support expect. Quadratic curves
- * become exact cubics.
+ * Emit a CFF .otf from a TTFObject. The contour data already lives on
+ * the TTFObject, so we just rebrand the name table (already done by
+ * `brandNameTable` upstream), run the optional `configure` hook (used
+ * to author GSUB liga rules), and let `OTFWriter` produce the CFF bytes.
  */
+export function buildOtfFromTtfObject(
+  data: TTFObject,
+  configure?: (data: TTFObject) => void,
+): Buffer {
+  configure?.(data)
+  return Buffer.from(new OTFWriter().write(data))
+}
+
+/** Backwards-compatible alias that takes a TTF buffer (re-parses it first). */
 export function buildOtfFromTtfBuf(
   ttfBuf: Buffer,
-  branding: BrandingInput,
-  configure?: (font: opentype.Font, src: opentype.Font) => void,
+  configure?: (data: TTFObject) => void,
 ): Buffer {
-  const ab = ttfBuf.buffer.slice(ttfBuf.byteOffset, ttfBuf.byteOffset + ttfBuf.byteLength)
-  const src = opentype.parse(ab)
-
-  interface PathCommand {
-    type: 'M' | 'L' | 'C' | 'Q' | 'Z'
-    x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number
-  }
-
-  const clonePath = (p: opentype.Path): opentype.Path => {
-    const out = new opentype.Path()
-    for (const c of p.commands as unknown as PathCommand[]) {
-      switch (c.type) {
-        case 'M': out.moveTo(c.x!, c.y!); break
-        case 'L': out.lineTo(c.x!, c.y!); break
-        case 'Q': out.quadraticCurveTo(c.x1!, c.y1!, c.x!, c.y!); break
-        case 'C': out.curveTo(c.x1!, c.y1!, c.x2!, c.y2!, c.x!, c.y!); break
-        case 'Z': out.close(); break
-      }
-    }
-    return out
-  }
-
-  const notdef = new opentype.Glyph({
-    name: '.notdef',
-    unicode: 0,
-    advanceWidth: src.glyphs.get(0).advanceWidth ?? 600,
-    path: new opentype.Path(),
-  })
-  const glyphs: opentype.Glyph[] = [notdef]
-  // Iterate ALL source glyphs (preserves index order) — only skip .notdef which we re-add.
-  for (let i = 1; i < src.glyphs.length; i++) {
-    const g = src.glyphs.get(i)
-    const unicodes: number[] = (g as opentype.Glyph & { unicodes?: number[] }).unicodes ?? (g.unicode != null ? [g.unicode] : [])
-    const ng = new opentype.Glyph({
-      name: g.name ?? `glyph${i}`,
-      unicode: unicodes[0],
-      advanceWidth: g.advanceWidth ?? 0,
-      path: clonePath(g.path),
-    })
-    if (unicodes.length > 1) {
-      ;(ng as opentype.Glyph & { unicodes: number[] }).unicodes = [...unicodes]
-    }
-    glyphs.push(ng)
-  }
-
-  const font = new opentype.Font({
-    familyName: branding.family,
-    styleName: branding.styleName,
-    unitsPerEm: src.unitsPerEm,
-    ascender: src.ascender,
-    descender: src.descender,
-    designer: branding.designerName ?? 'NPS Fonts contributors',
-    designerURL: 'https://github.com/stacksjs/nps-fonts',
-    manufacturer: branding.manufacturer ?? 'NPS Fonts contributors',
-    license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
-    licenseURL: 'https://openfontlicense.org',
-    version: branding.version,
-    description: branding.description,
-    copyright: branding.copyright,
-    trademark: '',
-    glyphs,
-  })
-  if (font.tables.os2) {
-    font.tables.os2.usWeightClass = branding.weightClass ?? 400
-    if (branding.widthClass !== undefined) font.tables.os2.usWidthClass = branding.widthClass
-    font.tables.os2.achVendID = 'NPSF'
-    font.tables.os2.fsSelection = branding.styleName === 'Regular' ? 0xC0 : 0x80
-  }
-  configure?.(font, src)
-  return Buffer.from(font.toArrayBuffer() as ArrayBuffer)
+  const ab = ttfBuf.buffer.slice(ttfBuf.byteOffset, ttfBuf.byteOffset + ttfBuf.byteLength) as ArrayBuffer
+  const data = new TTFReader().read(ab) as unknown as TTFObject
+  return buildOtfFromTtfObject(data, configure)
 }
 
 /** Sanity: ensure required side-bearing-ish fields exist on a TTFObject before write. */
@@ -286,10 +224,14 @@ export interface WriteOutputs {
   fileStem: string
   /** Source TTFObject (will be written verbatim as TTF). */
   ttfObject: TTFObject
-  /** OTF branding (re-emitted via opentype.js with optional GSUB injection). */
+  /** OTF branding (consumed by `OTFWriter` for the CFF Top DICT strings). */
   branding: BrandingInput
-  /** Optional opentype.js post-construction hook (e.g., add GSUB ligatures). */
-  configureOtf?: (font: opentype.Font, src: opentype.Font) => void
+  /**
+   * Optional post-construction hook called between TTF and OTF emission.
+   * Receives the same TTFObject the OTF writer will see — mutate `data.gsub`
+   * (e.g. via `new Substitution(...).add('liga', ...)`) to embed lookups.
+   */
+  configureOtf?: (data: TTFObject) => void
   /** Optional: also wrap the OTF as WOFF/WOFF2 (for ligature-bearing families). */
   woffFromOtf?: boolean
 }
@@ -303,13 +245,14 @@ export async function writeFamilyOutputs(o: WriteOutputs): Promise<{
   fillRequiredFields(o.ttfObject as unknown as FontData)
   const ttfArr = new TTFWriter().write(o.ttfObject)
   const ttf = Buffer.from(ttfArr)
-  const otf = buildOtfFromTtfBuf(ttf, o.branding, o.configureOtf)
+  const otf = buildOtfFromTtfObject(o.ttfObject, o.configureOtf)
 
   // For ligature-bearing families we want WOFF/WOFF2 to come from the OTF
-  // (since ts-font-editor's writer doesn't emit GSUB). Otherwise wrap TTF.
+  // (since GSUB authoring may have been routed through the OTF path).
   const sfntForWoff = o.woffFromOtf ? otf : ttf
+  const sfntForWoffAb = sfntForWoff.buffer.slice(sfntForWoff.byteOffset, sfntForWoff.byteOffset + sfntForWoff.byteLength) as ArrayBuffer
   const woff = sfntToWoff(sfntForWoff)
-  const woff2 = Buffer.from(await wawoff2.compress(sfntForWoff))
+  const woff2 = Buffer.from(await encodeWOFF2Native(sfntForWoffAb))
 
   const otfDir = resolve(o.outDir, 'otf')
   const ttfDir = resolve(o.outDir, 'ttf')

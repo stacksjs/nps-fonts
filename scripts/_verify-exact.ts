@@ -14,13 +14,12 @@
  *
  * Exits 0 on success, 1 on any unexpected mismatch.
  */
-import opentype from 'opentype.js'
-import { Resvg } from '@resvg/resvg-js'
+import { Resvg } from 'ts-svg'
 import png from 'ts-png'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { TTFReader, TTFWriter, createInstance, type TTFObject } from 'ts-font-editor'
+import { createInstance, Font, parse, TTFReader, TTFWriter, type TTFObject } from 'ts-fonts'
 import { ADDITIONS, PATCHES } from '../sources/nps-2026/patches.ts'
 import { PIPELINES } from './lib/transforms.ts'
 
@@ -36,23 +35,23 @@ const BUILT_VF = resolve(ROOT, 'fonts', 'nps-2026', 'ttf', 'NPS_2026[wght].ttf')
 const pristineData = JSON.parse(await readFile(OUTLINES, 'utf8')) as TTFObject
 PIPELINES['nps-2026']!(pristineData as unknown as Parameters<typeof PIPELINES['nps-2026']>[0])
 const pristineBuf = Buffer.from(new TTFWriter().write(pristineData))
-const pristine = opentype.parse(pristineBuf.buffer.slice(pristineBuf.byteOffset, pristineBuf.byteOffset + pristineBuf.byteLength))
+const pristine = parse(pristineBuf.buffer.slice(pristineBuf.byteOffset, pristineBuf.byteOffset + pristineBuf.byteLength))
 
 // Parse built static TTF
 const builtStaticArrayBuf = await Bun.file(BUILT_STATIC).arrayBuffer()
-const builtStatic = opentype.parse(builtStaticArrayBuf)
+const builtStatic = parse(builtStaticArrayBuf)
 
 // Instantiate built variable TTF at wght=400 and parse
-let builtVfAt400: opentype.Font | null = null
+let builtVfAt400: Font | null = null
 if (existsSync(BUILT_VF)) {
   const vfBuf = await Bun.file(BUILT_VF).arrayBuffer()
   const vf = new TTFReader().read(vfBuf)
   const inst = createInstance(vf, { coordinates: { wght: 400 }, updateName: false })
   const instBuf = Buffer.from(new TTFWriter().write(inst))
-  builtVfAt400 = opentype.parse(instBuf.buffer.slice(instBuf.byteOffset, instBuf.byteOffset + instBuf.byteLength))
+  builtVfAt400 = parse(instBuf.buffer.slice(instBuf.byteOffset, instBuf.byteOffset + instBuf.byteLength))
 }
 
-function renderPNG(font: opentype.Font, ch: string): Buffer {
+function renderPNG(font: Font, ch: string): Buffer {
   const size = 500, pad = 50, baseline = size + pad
   const w = Math.max(700, Math.ceil(font.getAdvanceWidth(ch, size)) + pad * 2)
   const h = size + pad * 2
@@ -82,7 +81,7 @@ for (let cp = 0x0020; cp <= 0xFFFF; cp++) {
 
 interface Result { exact: number, mismatches: Array<{ cp: number, name: string, diff: number }> }
 
-function check(target: opentype.Font, label: string): Result {
+function check(target: Font, label: string): Result {
   let exact = 0
   const mismatches: Array<{ cp: number, name: string, diff: number }> = []
   for (const { cp, name } of covered) {

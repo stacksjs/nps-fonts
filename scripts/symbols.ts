@@ -2,7 +2,7 @@
 /**
  * Build the NPS Symbols parametric icon font from scratch.
  *
- * Drawn entirely with opentype.js paths — no upstream source. Pictographs
+ * Drawn entirely with ts-fonts paths — no upstream source. Pictographs
  * are placed at PUA codepoints (U+E000+) so they don't collide with text,
  * and also at semantic ASCII letters so users can type them naturally
  * (e.g. 'M' for mountain in a "NPS Symbols" font-family stack).
@@ -10,10 +10,8 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import opentype from 'opentype.js'
+import { buildFontFromGlyphs, encodeWOFF2Native, OTFWriter, OTGlyph, Path, type Glyph } from 'ts-fonts'
 import { sfntToWoff } from './lib/woff.ts'
-
-const wawoff2 = await import('wawoff2')
 
 const ROOT = resolve(import.meta.dir, '..')
 const FONTS = resolve(ROOT, 'fonts', 'nps-symbols')
@@ -31,14 +29,14 @@ const PAD = 100             // visual padding inside the advance
 
 const KAPPA = 0.5522847498307936
 
-function rect(p: opentype.Path, x: number, y: number, w: number, h: number) {
+function rect(p: Path, x: number, y: number, w: number, h: number) {
   p.moveTo(x, y)
   p.lineTo(x + w, y)
   p.lineTo(x + w, y + h)
   p.lineTo(x, y + h)
   p.close()
 }
-function ellipse(p: opentype.Path, cx: number, cy: number, rx: number, ry: number, hole = false) {
+function ellipse(p: Path, cx: number, cy: number, rx: number, ry: number, hole = false) {
   const kx = rx * KAPPA, ky = ry * KAPPA
   if (!hole) {
     p.moveTo(cx + rx, cy)
@@ -55,12 +53,12 @@ function ellipse(p: opentype.Path, cx: number, cy: number, rx: number, ry: numbe
   }
   p.close()
 }
-function poly(p: opentype.Path, pts: [number, number][]) {
+function poly(p: Path, pts: [number, number][]) {
   p.moveTo(pts[0]![0], pts[0]![1])
   for (let i = 1; i < pts.length; i++) p.lineTo(pts[i]![0], pts[i]![1])
   p.close()
 }
-function strokeLine(p: opentype.Path, x1: number, y1: number, x2: number, y2: number, w: number) {
+function strokeLine(p: Path, x1: number, y1: number, x2: number, y2: number, w: number) {
   const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy)
   if (L === 0) return
   const nx = -dy / L * w / 2, ny = dx / L * w / 2
@@ -75,7 +73,7 @@ function strokeLine(p: opentype.Path, x1: number, y1: number, x2: number, y2: nu
 // Icon drawers — each returns a Path centered in [PAD, UPM-PAD]
 // ---------------------------------------------------------------------------
 
-type Drawer = (p: opentype.Path) => void
+type Drawer = (p: Path) => void
 
 /** NPS arrowhead — the iconic shield silhouette. Curved top, sloped
  *  shoulders, pointed bottom. Reads as the NPS shield even at small sizes. */
@@ -805,61 +803,157 @@ const GLYPHS: GlyphSpec[] = [
 // Build the font
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Path → TT contour conversion. Cubic curves are split into two quadratics
+// at t=0.5 (close enough at icon scale) so the result fits the TTFObject
+// glyf model. OTFWriter then re-lifts the quadratics back to cubics for
+// the CFF charstring — the round-trip is lossless within ±0.5 unit.
+// ---------------------------------------------------------------------------
+
+interface Pt { x: number, y: number, onCurve: boolean }
+type Contour = Pt[]
+
+function cubicToTwoQuadratics(
+  x0: number, y0: number,
+  c1x: number, c1y: number,
+  c2x: number, c2y: number,
+  x1: number, y1: number,
+): { mid: Pt, ctrl1: Pt, ctrl2: Pt, end: Pt } {
+  // Split cubic at t=0.5; each half approximates as a quadratic.
+  // Mid-point on the cubic at t=0.5
+  const mx = 0.125 * x0 + 0.375 * c1x + 0.375 * c2x + 0.125 * x1
+  const my = 0.125 * y0 + 0.375 * c1y + 0.375 * c2y + 0.125 * y1
+  // Tangent endpoints at t=0.5: derivative blends c1+c2 with t=0.5.
+  // Half-cubic A: P0, c1, (c1+c2)/2, mid → quadratic ctrl ≈ midpoint of cubic c1 and (c1+c2)/2
+  const halfC = { x: (c1x + c2x) / 2, y: (c1y + c2y) / 2 }
+  // Quadratic for A endpoints (P0, mid) with control c1' = (3c1 - P0 + halfC) / 3
+  // Approximation: use the midpoint of c1 and halfC as the quadratic control.
+  const ctrl1: Pt = { x: (c1x + halfC.x) / 2, y: (c1y + halfC.y) / 2, onCurve: false }
+  // Quadratic for B endpoints (mid, P1) with control c2' similarly
+  const ctrl2: Pt = { x: (halfC.x + c2x) / 2, y: (halfC.y + c2y) / 2, onCurve: false }
+  return {
+    mid: { x: mx, y: my, onCurve: true },
+    ctrl1,
+    ctrl2,
+    end: { x: x1, y: y1, onCurve: true },
+  }
+}
+
+interface PathCommand {
+  type: 'M' | 'L' | 'Q' | 'C' | 'Z'
+  x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number
+}
+
+function pathToContours(path: Path): Contour[] {
+  const contours: Contour[] = []
+  let current: Contour | null = null
+  let lastX = 0, lastY = 0
+  for (const cmd of path.commands as unknown as PathCommand[]) {
+    switch (cmd.type) {
+      case 'M':
+        current = []
+        contours.push(current)
+        current.push({ x: cmd.x!, y: cmd.y!, onCurve: true })
+        lastX = cmd.x!; lastY = cmd.y!
+        break
+      case 'L':
+        if (!current) break
+        current.push({ x: cmd.x!, y: cmd.y!, onCurve: true })
+        lastX = cmd.x!; lastY = cmd.y!
+        break
+      case 'Q':
+        if (!current) break
+        current.push({ x: cmd.x1!, y: cmd.y1!, onCurve: false })
+        current.push({ x: cmd.x!, y: cmd.y!, onCurve: true })
+        lastX = cmd.x!; lastY = cmd.y!
+        break
+      case 'C': {
+        if (!current) break
+        const split = cubicToTwoQuadratics(lastX, lastY, cmd.x1!, cmd.y1!, cmd.x2!, cmd.y2!, cmd.x!, cmd.y!)
+        current.push(split.ctrl1)
+        current.push(split.mid)
+        current.push(split.ctrl2)
+        current.push(split.end)
+        lastX = cmd.x!; lastY = cmd.y!
+        break
+      }
+      case 'Z':
+        current = null
+        break
+    }
+  }
+  return contours
+}
+
+function bboxOf(contours: Contour[]): { xMin: number, yMin: number, xMax: number, yMax: number } {
+  let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity
+  for (const c of contours) for (const p of c) {
+    if (p.x < xMin) xMin = p.x
+    if (p.x > xMax) xMax = p.x
+    if (p.y < yMin) yMin = p.y
+    if (p.y > yMax) yMax = p.y
+  }
+  if (!Number.isFinite(xMin)) { xMin = 0; yMin = 0; xMax = 0; yMax = 0 }
+  return { xMin: Math.round(xMin), yMin: Math.round(yMin), xMax: Math.round(xMax), yMax: Math.round(yMax) }
+}
+
+function makeGlyph(name: string, unicodes: number[], path: Path | null): Glyph {
+  const contours: Contour[] = path ? pathToContours(path) : []
+  // Round all coords to integers (TTF requirement).
+  for (const c of contours) for (const p of c) {
+    p.x = Math.round(p.x); p.y = Math.round(p.y)
+  }
+  const bb = bboxOf(contours)
+  return {
+    name,
+    unicode: unicodes,
+    advanceWidth: ADVANCE,
+    leftSideBearing: 0,
+    xMin: bb.xMin,
+    yMin: bb.yMin,
+    xMax: bb.xMax,
+    yMax: bb.yMax,
+    contours,
+  } as unknown as Glyph
+}
+
 async function build() {
-  const notdef = new opentype.Glyph({
-    name: '.notdef',
-    unicode: 0,
-    advanceWidth: ADVANCE,
-    path: new opentype.Path(),
-  })
-  const space = new opentype.Glyph({
-    name: 'space',
-    unicode: 0x20,
-    advanceWidth: ADVANCE,
-    path: new opentype.Path(),
-  })
-  const glyphs: opentype.Glyph[] = [notdef, space]
+  const glyphs: Glyph[] = []
+  glyphs.push(makeGlyph('.notdef', [], null))
+  glyphs.push(makeGlyph('space', [0x20], null))
 
   for (const spec of GLYPHS) {
-    const path = new opentype.Path()
+    const path = new Path()
     spec.draw(path)
-    const g = new opentype.Glyph({
-      name: spec.name,
-      unicode: spec.pua,
-      advanceWidth: ADVANCE,
-      path,
-    })
-    if (spec.ascii !== undefined) {
-      ;(g as opentype.Glyph & { unicodes: number[] }).unicodes = [spec.pua, spec.ascii]
-    }
-    glyphs.push(g)
+    const unicodes = spec.ascii !== undefined ? [spec.pua, spec.ascii] : [spec.pua]
+    glyphs.push(makeGlyph(spec.name, unicodes, path))
   }
 
-  const font = new opentype.Font({
-    familyName: 'NPS Symbols',
-    styleName: 'Regular',
+  const ttf = buildFontFromGlyphs({
+    glyphs,
     unitsPerEm: UPM,
     ascender: ICON_TOP + PAD,
     descender: -PAD,
+    capHeight: ICON_TOP,
+    xHeight: ICON_TOP * 0.5,
+    weightClass: 400,
+    vendorID: 'NPSF',
+    familyName: 'NPS Symbols',
+    styleName: 'Regular',
+    postScriptName: 'NPSSymbols-Regular',
+    fullName: 'NPS Symbols',
+    version: 'Version 0.5.0',
+    copyright: 'Copyright (c) 2026, NPS Fonts contributors. With Reserved Font Name "NPS Symbols".',
+    description: 'NPS Symbols — National Park Service-inspired pictograph font. Drawn from scratch.',
     designer: 'NPS Fonts contributors',
     designerURL: 'https://github.com/stacksjs/nps-fonts',
     manufacturer: 'NPS Fonts',
     license: 'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
     licenseURL: 'https://openfontlicense.org',
-    version: '0.5.0',
-    description: 'NPS Symbols — National Park Service-inspired pictograph font. Drawn from scratch.',
-    copyright: 'Copyright (c) 2026, NPS Fonts contributors. With Reserved Font Name "NPS Symbols".',
-    trademark: '',
-    glyphs,
   })
 
-  if (font.tables.os2) {
-    font.tables.os2.usWeightClass = 400
-    font.tables.os2.achVendID = 'NPSF'
-    font.tables.os2.fsSelection = 0xC0 // bit 6 (regular) + bit 7 (use typo metrics)
-  }
-
-  const otfBuf = Buffer.from(font.toArrayBuffer() as ArrayBuffer)
+  const otfBuf = Buffer.from(new OTFWriter({ fontName: 'NPSSymbols-Regular' }).write(ttf))
+  const otfAb = otfBuf.buffer.slice(otfBuf.byteOffset, otfBuf.byteOffset + otfBuf.byteLength) as ArrayBuffer
 
   await mkdir(resolve(FONTS, 'otf'), { recursive: true })
   await mkdir(resolve(FONTS, 'ttf'), { recursive: true })
@@ -870,9 +964,11 @@ async function build() {
   await writeFile(resolve(FONTS, 'otf', 'NPSSymbols-Regular.otf'), otfBuf)
   await writeFile(resolve(FONTS, 'ttf', 'NPSSymbols-Regular.ttf'), otfBuf)
   await writeFile(resolve(FONTS, 'woff', 'NPSSymbols-Regular.woff'), sfntToWoff(otfBuf))
-  const woff2Buf = Buffer.from(await wawoff2.compress(otfBuf))
+  const woff2Buf = Buffer.from(await encodeWOFF2Native(otfAb))
   await writeFile(resolve(FONTS, 'woff2', 'NPSSymbols-Regular.woff2'), woff2Buf)
 
+  // OTGlyph imported but not used at runtime (kept for API symmetry).
+  void OTGlyph
   console.log(`✓ NPS Symbols: ${GLYPHS.length} pictographs · ${(otfBuf.length / 1024).toFixed(1)}KB OTF`)
 }
 

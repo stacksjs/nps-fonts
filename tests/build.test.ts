@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import opentype from 'opentype.js'
+import { parse, readGsubFeatures, readLayoutHeader, TTFReader } from 'ts-fonts'
 import { ALL_FAMILIES, FAMILY_DISPLAY } from '../scripts/lib/common.ts'
 
 const FONTS_DIR = resolve(import.meta.dir, '..', 'fonts')
@@ -35,9 +35,9 @@ describe('fonts re-parse cleanly', () => {
     const base = `${meta.file}-Regular`
     test(`${id}`, async () => {
       const buf = await Bun.file(resolve(FONTS_DIR, id, 'otf', `${base}.otf`)).arrayBuffer()
-      const font = opentype.parse(buf)
+      const font = parse(buf)
       expect(font.unitsPerEm).toBeGreaterThan(0)
-      expect(font.glyphs.length).toBeGreaterThan(20)
+      expect(font.numGlyphs).toBeGreaterThan(20)
     })
   }
 })
@@ -48,8 +48,8 @@ describe('family name matches manifest', () => {
     const base = `${meta.file}-Regular`
     test(`${id}`, async () => {
       const buf = await Bun.file(resolve(FONTS_DIR, id, 'otf', `${base}.otf`)).arrayBuffer()
-      const font = opentype.parse(buf)
-      expect(font.names.fontFamily?.en).toBe(meta.display)
+      const font = parse(buf)
+      expect(font.familyName).toBe(meta.display)
     })
   }
 })
@@ -60,8 +60,8 @@ describe('copyright includes NPS Fonts credit', () => {
     const base = `${meta.file}-Regular`
     test(`${id}`, async () => {
       const buf = await Bun.file(resolve(FONTS_DIR, id, 'otf', `${base}.otf`)).arrayBuffer()
-      const font = opentype.parse(buf)
-      const cr = font.names.copyright?.en ?? ''
+      const font = parse(buf)
+      const cr = (font.data.name.copyright as string) ?? ''
       expect(cr.length).toBeGreaterThan(20)
       expect(cr).toContain('NPS Fonts')
       expect(cr).toContain(meta.display)
@@ -80,8 +80,8 @@ describe('NPS Symbols: pictographs at expected codepoints', () => {
   ] as const
   test('all PUA + ASCII shortcuts present', async () => {
     const buf = await Bun.file(resolve(FONTS_DIR, 'nps-symbols', 'otf', 'NPSSymbols-Regular.otf')).arrayBuffer()
-    const font = opentype.parse(buf)
-    expect(font.names.fontFamily?.en).toBe('NPS Symbols')
+    const font = parse(buf)
+    expect(font.familyName).toBe('NPS Symbols')
     for (const [cp, name] of expected) {
       const g = font.charToGlyph(String.fromCodePoint(cp))
       expect(g.name).toBe(name)
@@ -95,14 +95,20 @@ describe('NPS Symbols: pictographs at expected codepoints', () => {
 describe('Campmate Script: GSUB liga is present', () => {
   test('GSUB table with liga feature exists', async () => {
     const buf = await Bun.file(resolve(FONTS_DIR, 'campmate-script', 'otf', 'CampmateScript-Regular.otf')).arrayBuffer()
-    const font = opentype.parse(buf)
-    expect(font.tables.gsub).toBeDefined()
-    const ligas = font.substitution.getLigatures('liga')
-    expect(ligas.length).toBeGreaterThanOrEqual(5)
-    // All ligature entries must reference real glyph indices (not 0 fallback)
-    for (const l of ligas) {
+    const ttf = new TTFReader().read(buf)
+    expect(ttf.rawTables?.GSUB).toBeDefined()
+    // Parse GSUB → ligature lookups via the layout-common machinery.
+    const gsubBytes = ttf.rawTables!.GSUB!
+    const gsubAb = new ArrayBuffer(gsubBytes.byteLength)
+    new Uint8Array(gsubAb).set(gsubBytes)
+    const view = new DataView(gsubAb)
+    const header = readLayoutHeader(view, 0)
+    const features = readGsubFeatures(view, header, ['liga'])
+    expect(features.ligatures.length).toBeGreaterThanOrEqual(5)
+    for (const l of features.ligatures) {
       expect(l.by).toBeGreaterThan(0)
-      for (const s of l.sub) expect(s).toBeGreaterThan(0)
+      expect(l.first).toBeGreaterThan(0)
+      for (const s of l.components) expect(s).toBeGreaterThan(0)
     }
   })
 })

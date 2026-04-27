@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Build orchestrator. All families are parametric originals drawn from
- * scratch with opentype.js — no OFL forks.
+ * scratch with ts-fonts — no OFL forks.
  *
  *   bun run scripts/build.ts                       # all families
  *   bun run scripts/build.ts --all

@@ -149,7 +149,7 @@ export const CHARSET: CharsetEntry[] = (() => {
 })()
 
 // De-duplicate glyph names (multiple codepoints can map to one glyph, e.g. NBSP→space).
-// The font-writer handles that via opentype.js's glyph cmap which supports multiple unicodes per glyph.
+// The font-writer handles that via the cmap (codepoint → glyph index), which supports multiple codepoints mapping to one glyph.
 
 /** Glyphs keyed by codepoint for quick lookup. */
 export const CHARSET_BY_CP: Map<number, CharsetEntry> = new Map(

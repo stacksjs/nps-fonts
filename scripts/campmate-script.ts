@@ -5,11 +5,11 @@
  * Outlines live in `sources/campmate-script/outlines.json`. The source
  * carries 19 designer ligature glyphs (named `xy.liga`, `xyz.liga`) but
  * the extractor doesn't preserve GSUB. We rebuild the `liga` GSUB feature
- * in opentype.js by parsing each ligature glyph name back into its
- * component letters.
+ * via ts-fonts' Substitution helper by parsing each ligature glyph
+ * name back into its component letters.
  */
 import { resolve } from 'node:path'
-import opentype from 'opentype.js'
+import { Substitution, type TTFObject } from 'ts-fonts'
 import {
   brandNameTable,
   loadOutlines,
@@ -27,42 +27,38 @@ const COPYRIGHT = `Copyright (c) 2026, NPS Fonts contributors. ${META.display} �
 const DESCRIPTION = `${META.display} — rounded upright script with brush ligatures via OpenType liga GSUB.`
 const VERSION = 'Version 1.000'
 
-interface SubstitutionAdd {
-  add: (feature: string, entry: { sub: number[], by: number }) => void
-}
-
-/** Reconstruct GSUB `liga` rules from glyph naming convention `<chars>.liga`. */
-function addLigatureRules(font: opentype.Font, src: opentype.Font): number {
-  // Build name → glyph index lookup
+/** Reconstruct GSUB `liga` rules from the glyph naming convention `<chars>.liga`. */
+function addLigatureRules(data: TTFObject): number {
+  // Build name → index map
   const idxByName = new Map<string, number>()
-  for (let i = 0; i < font.glyphs.length; i++) {
-    const g = font.glyphs.get(i)
+  // Also build single-char → glyph index map via the cmap.
+  const idxByChar = new Map<string, number>()
+  for (let i = 0; i < data.glyf.length; i++) {
+    const g = data.glyf[i]!
     if (g.name) idxByName.set(g.name, i)
   }
-
-  // Look up letters via the SOURCE font's cmap (the rebuilt font's cmap
-  // is generated lazily at toArrayBuffer time, so font.charToGlyph would
-  // return notdef here). Indices are preserved 1:1 by buildOtfFromTtfBuf,
-  // so the source's index is also valid in the rebuilt font.
-  const letterIdx = (ch: string): number | undefined => {
-    const g = src.charToGlyph(ch)
-    if (!g || g.index === 0) return undefined
-    return g.index
+  // The TTFObject.cmap is `Record<number, number>` (codepoint → glyphIndex).
+  for (const cpStr of Object.keys(data.cmap ?? {})) {
+    const cp = Number(cpStr)
+    const gid = (data.cmap as Record<number, number>)[cp]!
+    if (gid === 0) continue
+    idxByChar.set(String.fromCodePoint(cp), gid)
   }
 
-  const sub = font.substitution as unknown as SubstitutionAdd
+  const sub = new Substitution({ data })
   let added = 0
-  for (let i = 0; i < src.glyphs.length; i++) {
-    const g = src.glyphs.get(i)
+  for (let i = 0; i < data.glyf.length; i++) {
+    const g = data.glyf[i]!
     const m = g.name?.match(/^([a-z]+)\.liga$/)
     if (!m) continue
     const chars = m[1]!
-    const ligIdx = idxByName.get(g.name!)
+    if (!g.name) continue
+    const ligIdx = idxByName.get(g.name)
     if (ligIdx == null || ligIdx === 0) continue
     const subIndices: number[] = []
     let valid = true
     for (const ch of chars) {
-      const idx = letterIdx(ch)
+      const idx = idxByChar.get(ch)
       if (idx == null) { valid = false; break }
       subIndices.push(idx)
     }
@@ -96,7 +92,7 @@ export async function buildCampmateScript() {
     ttfObject: data as unknown as Parameters<typeof writeFamilyOutputs>[0]['ttfObject'],
     branding,
     woffFromOtf: true,
-    configureOtf: (font, src) => { ligaCount = addLigatureRules(font, src) },
+    configureOtf: (d) => { ligaCount = addLigatureRules(d) },
   })
 
   return { glyphCount: (data as FontData).glyf.length, ligaCount, ...out }

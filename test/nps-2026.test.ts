@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { isVariableFont, listAxes, listNamedInstances, TTFReader } from 'ts-font-editor'
-import opentype from 'opentype.js'
+import { isVariableFont, listAxes, listNamedInstances, parse, TTFReader } from 'ts-fonts'
 
 /**
  * These tests operate on the committed build output under `fonts/nps-2026/`.
@@ -70,14 +69,14 @@ else {
       expect(ttf.name.fontFamily).toBe('NPS 2026')
     })
 
-    it('renders ASCII letters through opentype.js at reasonable advance widths', async () => {
+    it('renders ASCII letters through ts-fonts at reasonable advance widths', async () => {
       const ab = await Bun.file(STATIC).arrayBuffer()
-      const font = opentype.parse(ab)
-      // Sanity: a glyph like 'M' should have non-zero advance and bbox.
+      const font = parse(ab)
       const M = font.charToGlyph('M')
       expect(M).toBeDefined()
       expect(M.advanceWidth).toBeGreaterThan(0)
-      const bb = M.getBoundingBox()
+      const path = M.getPath(0, 0, font.unitsPerEm ?? 1000)
+      const bb = path.getBoundingBox()
       expect(bb.x2 - bb.x1).toBeGreaterThan(0)
       expect(bb.y2 - bb.y1).toBeGreaterThan(0)
     })

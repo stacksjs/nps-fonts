@@ -9,8 +9,8 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { Resvg } from '@resvg/resvg-js'
-import opentype from 'opentype.js'
+import { Resvg } from 'ts-svg'
+import { parse } from 'ts-fonts'
 import { ALL_FAMILIES, FAMILY_DISPLAY, type FamilyId } from './lib/common.ts'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -28,14 +28,14 @@ interface RenderOpts {
 
 async function renderToSVG(opts: RenderOpts): Promise<string> {
   const buf = await Bun.file(opts.fontPath).arrayBuffer()
-  const font = opentype.parse(buf)
+  const font = parse(buf)
   const padding = opts.fontSize * 0.4
   const baseline = opts.fontSize + padding
-  const path = font.getPath(opts.text, padding, baseline, opts.fontSize, { features: { liga: true } } as Parameters<typeof font.getPath>[4])
-  const advance = font.getAdvanceWidth(opts.text, opts.fontSize, { features: { liga: true } } as Parameters<typeof font.getAdvanceWidth>[2])
+  const path = font.getPath(opts.text, padding, baseline, opts.fontSize, { features: { liga: true } })
+  const advance = font.getAdvanceWidth(opts.text, opts.fontSize, { features: { liga: true } })
   const width = Math.max(opts.width, advance + padding * 2)
   const height = opts.fontSize + padding * 2
-  const pathSvg = path.toSVG(2)
+  const pathSvg = path.toSVG({ decimalPlaces: 2 })
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <rect width="100%" height="100%" fill="${opts.background ?? '#f5efe2'}"/>
   ${pathSvg.replace(/<path /, `<path fill="${opts.ink ?? '#1f2a23'}" `)}

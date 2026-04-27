@@ -20,7 +20,7 @@ The source ships 19 designer-drawn ligature glyphs named with the
 suffix `.liga` (e.g. `oo.liga`, `ll.liga`, `oss.liga`). The
 [`_extract-source.ts`](../../scripts/_extract-source.ts) extractor
 preserves the ligature glyph outlines but not the GSUB layout tables
-(`ts-font-editor` does not yet model GSUB — it's on the TODO list).
+(`ts-fonts` does not yet model GSUB — it's on the TODO list).
 
 [`scripts/campmate-script.ts`](../../scripts/campmate-script.ts)
 reconstructs the GSUB `liga` feature at OTF-write time by parsing

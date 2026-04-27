@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createInstance, TTFReader, type TTFObject, type Glyph } from 'ts-font-editor'
+import { createInstance, TTFReader, type TTFObject, type Glyph } from 'ts-fonts'
 
 /**
- * Interpolation sanity — guards against regressions in ts-font-editor's
+ * Interpolation sanity — guards against regressions in ts-fonts's
  * gvar applier. We compute three instances: at the Thin master location
  * (wght=100), at Regular (wght=400), and at an intermediate position
  * (wght=550). The intermediate result must fall between the flanking two
@@ -15,7 +15,7 @@ import { createInstance, TTFReader, type TTFObject, type Glyph } from 'ts-font-e
  * position at wght=550 should equal regular + 0.3 * (black - regular)
  * within sub-pixel rounding tolerance.
  *
- * If ts-font-editor's `createInstance` ever breaks at non-default axis
+ * If ts-fonts's `createInstance` ever breaks at non-default axis
  * positions (bad scalar formula, wrong gvar apply order, IUP bug,
  * phantom-point mishandling) this test fails loudly.
  */

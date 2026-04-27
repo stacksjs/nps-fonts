@@ -18,7 +18,7 @@
  * Raw passthrough tables (Uint8Array) and binary-typed fields are stripped
  * for JSON-portability; the build recomputes anything derivable.
  */
-import { otf2ttfobject, TTFReader } from 'ts-font-editor'
+import { otf2ttfobject, TTFReader } from 'ts-fonts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve, extname } from 'node:path'
 import { sanitizeNameTable } from './_sanitize-sources.ts'

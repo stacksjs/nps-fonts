@@ -15,7 +15,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { TTFWriter, type TTFObject } from 'ts-font-editor'
+import { TTFWriter, type TTFObject } from 'ts-fonts'
 import {
   brandNameTable,
   loadOutlines,
@@ -168,8 +168,9 @@ async function generateHtml(): Promise<{ html: string, rows: number }> {
     <div class="cell"><span class="tag">AFTER</span><span class="specimen" style="font-family:'${afterBrand.family}',serif;font-size:${cut.size}px">${escaped}</span></div>
     <div class="cell overlay">
       <span class="tag">OVERLAY</span>
-      <span class="overlay-stack" style="font-size:${cut.size}px">
-        <span class="layer before-layer" style="font-family:'${beforeBrand.family}',serif">${escaped}</span>
+      <span class="overlay-stack" style="font-size:${cut.size}px;font-family:'${beforeBrand.family}',serif">
+        <span class="sizer" aria-hidden="true">${escaped}</span>
+        <span class="layer before-layer" aria-hidden="true">${escaped}</span>
         <span class="layer after-layer"  style="font-family:'${afterBrand.family}',serif" aria-hidden="true">${escaped}</span>
       </span>
     </div>
@@ -214,12 +215,23 @@ section.row h2 {
 }
 .specimen { line-height: 1.05; color: #1f2a23; }
 .cell.overlay { background: #fff }
-.overlay-stack { position: relative; display: inline-block; line-height: 1.05; white-space: nowrap; }
-.overlay-stack .layer { white-space: nowrap; }
-.overlay-stack .before-layer { position: relative; color: #1f6feb; mix-blend-mode: multiply; }
-.overlay-stack .after-layer  { position: absolute; left: 0; top: 0; color: #d93025; mix-blend-mode: multiply; }
-/* Where both layers paint the same pixel, multiply produces near-black.
-   Color fringes (blue-only / red-only) reveal exactly where points moved. */
+/* Stack: a hidden 'sizer' gives the container its dimensions in normal flow;
+   both layers absolutely-position over it so they share the exact same
+   baseline (which is what we need to actually compare geometry). */
+.overlay-stack {
+  position: relative; display: inline-block;
+  line-height: 1; white-space: nowrap;
+}
+.overlay-stack .sizer { visibility: hidden; }
+.overlay-stack .layer {
+  position: absolute; left: 0; top: 0;
+  white-space: nowrap;
+  mix-blend-mode: multiply;
+}
+.overlay-stack .before-layer { color: #1f6feb; }
+.overlay-stack .after-layer  { color: #d93025; }
+/* Where both layers paint the same pixel, multiply darkens to near-black.
+   Visible blue-only / red-only fringes reveal where points actually moved. */
 </style>
 </head>
 <body>

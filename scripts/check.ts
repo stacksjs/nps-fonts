@@ -7,7 +7,7 @@
 
 import { readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import opentype from 'opentype.js'
+import { Font, parse } from 'ts-fonts'
 import { ALL_FAMILIES, FAMILY_DISPLAY } from './lib/common.ts'
 
 const FONTS_DIR = resolve(import.meta.dir, '..', 'fonts')
@@ -40,9 +40,9 @@ async function main() {
     for (const file of entries) {
       const path = resolve(otfDir, file)
       const buf = await Bun.file(path).arrayBuffer()
-      let font: opentype.Font
+      let font: Font
       try {
-        font = opentype.parse(buf)
+        font = parse(buf)
       }
       catch (e) {
         issues.push({ level: 'error', file, message: `failed to parse: ${(e as Error).message}` })
@@ -50,22 +50,23 @@ async function main() {
       }
       checked++
 
-      if (font.names.fontFamily?.en !== meta.display) {
+      const familyName = font.familyName
+      if (familyName !== meta.display) {
         issues.push({
           level: 'error',
           file,
-          message: `family name mismatch: got "${font.names.fontFamily?.en}", expected "${meta.display}"`,
+          message: `family name mismatch: got "${familyName}", expected "${meta.display}"`,
         })
       }
-      const cr = font.names.copyright?.en ?? ''
+      const cr = (font.data.name.copyright as string) ?? ''
       if (!cr.includes('NPS Fonts')) {
         issues.push({ level: 'warn', file, message: 'copyright missing "NPS Fonts" credit' })
       }
 
       console.log(
         `✓ ${file.padEnd(40)} `
-        + `glyphs=${String(font.glyphs.length).padStart(4)} `
-        + `upm=${font.unitsPerEm}`,
+        + `glyphs=${String(font.numGlyphs).padStart(4)} `
+        + `upm=${font.data.head?.unitsPerEm ?? '?'}`,
       )
     }
   }
